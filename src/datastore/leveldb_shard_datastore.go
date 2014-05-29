@@ -6,6 +6,7 @@ import (
 	"configuration"
 	"fmt"
 	"math"
+	"metastore"
 	"os"
 	"path/filepath"
 	"protocol"
@@ -29,6 +30,7 @@ type LevelDbShardDatastore struct {
 	maxOpenShards  int
 	pointBatchSize int
 	writeBatchSize int
+	metaStore      metastore.Store
 }
 
 const (
@@ -67,7 +69,7 @@ type rawColumnValue struct {
 	value    []byte
 }
 
-func NewLevelDbShardDatastore(config *configuration.Configuration) (*LevelDbShardDatastore, error) {
+func NewLevelDbShardDatastore(config *configuration.Configuration, metaStore metastore.Store) (*LevelDbShardDatastore, error) {
 	baseDbDir := filepath.Join(config.DataDir, SHARD_DATABASE_DIR)
 	err := os.MkdirAll(baseDbDir, 0744)
 	if err != nil {
@@ -92,6 +94,7 @@ func NewLevelDbShardDatastore(config *configuration.Configuration) (*LevelDbShar
 		shardsToClose:  make(map[uint32]bool),
 		pointBatchSize: config.LevelDbPointBatchSize,
 		writeBatchSize: config.LevelDbWriteBatchSize,
+		metaStore:      metaStore,
 	}, nil
 }
 
@@ -124,7 +127,7 @@ func (self *LevelDbShardDatastore) GetOrCreateShard(id uint32) (cluster.LocalSha
 		return nil, err
 	}
 
-	db, err = NewLevelDbShard(ldb, self.pointBatchSize, self.writeBatchSize)
+	db, err = NewLevelDbShard(ldb, self.pointBatchSize, self.writeBatchSize, self.metaStore)
 	if err != nil {
 		log.Error("Error creating shard: ", err)
 		ldb.Close()

@@ -9,6 +9,8 @@ import (
 
 	log "code.google.com/p/log4go"
 	"github.com/goraft/raft"
+
+	"protocol"
 )
 
 var internalRaftCommands map[string]raft.Command
@@ -29,6 +31,7 @@ func init() {
 		&SetContinuousQueryTimestampCommand{},
 		&CreateShardsCommand{},
 		&DropShardCommand{},
+		&CreateSeriesFieldIdsCommand{},
 	} {
 		internalRaftCommands[command.CommandName()] = command
 	}
@@ -348,4 +351,23 @@ func (c *DropShardCommand) Apply(server raft.Server) (interface{}, error) {
 	config := server.Context().(*cluster.ClusterConfiguration)
 	err := config.DropShard(c.ShardId, c.ServerIds)
 	return nil, err
+}
+
+type CreateSeriesFieldIdsCommand struct {
+	Database string
+	Series   []*protocol.Series
+}
+
+func NewCreateSeriesFieldIdsCommand(database string, series []*protocol.Series) *CreateSeriesFieldIdsCommand {
+	return &CreateSeriesFieldIdsCommand{Database: database, Series: series}
+}
+
+func (c *CreateSeriesFieldIdsCommand) CommandName() string {
+	return "create_series_field_ids"
+}
+
+func (c *CreateSeriesFieldIdsCommand) Apply(server raft.Server) (interface{}, error) {
+	config := server.Context().(*cluster.ClusterConfiguration)
+	err := config.Metastore.GetOrSetFieldIds(c.Database, c.Series)
+	return c.Series, err
 }

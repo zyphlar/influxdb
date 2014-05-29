@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"metastore"
 	"parser"
 	"protocol"
 	"regexp"
@@ -29,9 +30,10 @@ type LevelDbShard struct {
 	closed         bool
 	pointBatchSize int
 	writeBatchSize int
+	metaStore      metastore.Store
 }
 
-func NewLevelDbShard(db *levigo.DB, pointBatchSize, writeBatchSize int) (*LevelDbShard, error) {
+func NewLevelDbShard(db *levigo.DB, pointBatchSize, writeBatchSize int, metaStore metastore.Store) (*LevelDbShard, error) {
 	ro := levigo.NewReadOptions()
 	lastIdBytes, err2 := db.Get(ro, NEXT_ID_KEY)
 	if err2 != nil {
@@ -53,6 +55,7 @@ func NewLevelDbShard(db *levigo.DB, pointBatchSize, writeBatchSize int) (*LevelD
 		lastIdUsed:     lastId,
 		pointBatchSize: pointBatchSize,
 		writeBatchSize: writeBatchSize,
+		metaStore:      metaStore,
 	}, nil
 }
 
@@ -69,19 +72,14 @@ func (self *LevelDbShard) Write(database string, series []*protocol.Series) erro
 		}
 
 		count := 0
-		for fieldIndex, field := range s.Fields {
-			temp := field
-			id, err := self.createIdForDbSeriesColumn(&database, s.Name, &temp)
-			if err != nil {
-				return err
-			}
+		for fieldIndex, id := range s.FieldIds {
 			keyBuffer := bytes.NewBuffer(make([]byte, 0, 24))
 			dataBuffer := proto.NewBuffer(nil)
 			for _, point := range s.Points {
 				keyBuffer.Reset()
 				dataBuffer.Reset()
 
-				keyBuffer.Write(id)
+				binary.Write(keyBuffer, binary.BigEndian, &id)
 				timestamp := self.convertTimestampToUint(point.GetTimestampInMicroseconds())
 				// pass the uint64 by reference so binary.Write() doesn't create a new buffer
 				// see the source code for intDataSize() in binary.go
@@ -94,7 +92,7 @@ func (self *LevelDbShard) Write(database string, series []*protocol.Series) erro
 					goto check
 				}
 
-				err = dataBuffer.Marshal(point.Values[fieldIndex])
+				err := dataBuffer.Marshal(point.Values[fieldIndex])
 				if err != nil {
 					return err
 				}
@@ -133,7 +131,7 @@ func (self *LevelDbShard) Query(querySpec *parser.QuerySpec, processor cluster.Q
 
 	for series, columns := range seriesAndColumns {
 		if regex, ok := series.GetCompiledRegex(); ok {
-			seriesNames := self.getSeriesForDbAndRegex(querySpec.Database(), regex)
+			seriesNames := self.metaStore.GetSeriesForDatabaseAndRegex(querySpec.Database(), regex)
 			for _, name := range seriesNames {
 				if !querySpec.HasReadAccess(name) {
 					continue
@@ -154,7 +152,7 @@ func (self *LevelDbShard) Query(querySpec *parser.QuerySpec, processor cluster.Q
 }
 
 func (self *LevelDbShard) DropDatabase(database string) error {
-	seriesNames := self.getSeriesForDatabase(database)
+	seriesNames := self.metaStore.GetSeriesForDatabase(database)
 	for _, name := range seriesNames {
 		if err := self.dropSeries(database, name); err != nil {
 			log.Error("DropDatabase: ", err)
@@ -419,7 +417,7 @@ func (self *LevelDbShard) dropSeries(database, series string) error {
 		return err
 	}
 
-	for _, name := range self.getColumnNamesForSeries(database, series) {
+	for _, name := range self.metaStore.GetColumnNamesForSeries(database, series) {
 		indexKey := append(SERIES_COLUMN_INDEX_PREFIX, []byte(database+"~"+series+"~"+name)...)
 		wb.Delete(indexKey)
 	}
@@ -442,7 +440,7 @@ func (self *LevelDbShard) byteArraysForStartAndEndTimes(startTime, endTime int64
 }
 
 func (self *LevelDbShard) deleteRangeOfSeriesCommon(database, series string, startTimeBytes, endTimeBytes []byte) error {
-	columns := self.getColumnNamesForSeries(database, series)
+	columns := self.metaStore.GetColumnNamesForSeries(database, series)
 	fields, err := self.getFieldsForSeries(database, series, columns)
 	if err != nil {
 		// because a db is distributed across the cluster, it's possible we don't have the series indexed here. ignore
@@ -505,7 +503,7 @@ func (self *LevelDbShard) deleteRangeOfSeries(database, series string, startTime
 }
 
 func (self *LevelDbShard) deleteRangeOfRegex(database string, regex *regexp.Regexp, startTime, endTime time.Time) error {
-	series := self.getSeriesForDbAndRegex(database, regex)
+	series := self.metaStore.GetSeriesForDatabaseAndRegex(database, regex)
 	for _, name := range series {
 		err := self.deleteRangeOfSeries(database, name, startTime, endTime)
 		if err != nil {
@@ -515,7 +513,9 @@ func (self *LevelDbShard) deleteRangeOfRegex(database string, regex *regexp.Rege
 	return nil
 }
 
-func (self *LevelDbShard) getFieldsForSeries(db, series string, columns []string) ([]*Field, error) {
+// TODO: remove this function. I'm keeping it around for the moment since it'll probably have to be
+//       used in the DB upgrate/migration that moves metadata from the shard to Raft
+func (self *LevelDbShard) getFieldsForSeriesDEPRECATED(db, series string, columns []string) ([]*Field, error) {
 	isCountQuery := false
 	if len(columns) > 0 && columns[0] == "*" {
 		columns = self.getColumnNamesForSeries(db, series)
@@ -597,7 +597,7 @@ func (self *LevelDbShard) byteArrayForTime(t time.Time) []byte {
 // TODO: this needs to move to the metastore
 func (self *LevelDbShard) getSeriesForDbAndRegexDEPRECATED(database string, regex *regexp.Regexp) []string {
 	names := []string{}
-	allSeries := self.getSeriesForDatabase(database)
+	allSeries := self.metaStore.GetSeriesForDatabase(database)
 	for _, name := range allSeries {
 		if regex.MatchString(name) {
 			names = append(names, name)
@@ -635,7 +635,7 @@ func (self *LevelDbShard) getSeriesForDatabaseDEPRECATED(database string) []stri
 
 // TODO: move to the metastore
 func (self *LevelDbShard) createIdForDbSeriesColumnDEPRECATED(db, series, column *string) (ret []byte, err error) {
-	ret, err = self.getIdForDbSeriesColumn(db, series, column)
+	ret, err = self.getIdForDbSeriesColumnDEPRECATED(db, series, column)
 	if err != nil {
 		return
 	}
@@ -646,7 +646,7 @@ func (self *LevelDbShard) createIdForDbSeriesColumnDEPRECATED(db, series, column
 
 	self.columnIdMutex.Lock()
 	defer self.columnIdMutex.Unlock()
-	ret, err = self.getIdForDbSeriesColumn(db, series, column)
+	ret, err = self.getIdForDbSeriesColumnDEPRECATED(db, series, column)
 	if err != nil {
 		return
 	}
@@ -655,7 +655,7 @@ func (self *LevelDbShard) createIdForDbSeriesColumnDEPRECATED(db, series, column
 		return
 	}
 
-	ret, err = self.getNextIdForColumn(db, series, column)
+	ret, err = self.getNextIdForColumnDEPRECATED(db, series, column)
 	if err != nil {
 		return
 	}
@@ -666,7 +666,7 @@ func (self *LevelDbShard) createIdForDbSeriesColumnDEPRECATED(db, series, column
 	return
 }
 
-// TODO: move to metastore
+// TODO: remove this after a version that doesn't support migration from old non-raft metastore
 func (self *LevelDbShard) getIdForDbSeriesColumnDEPRECATED(db, series, column *string) (ret []byte, err error) {
 	s := fmt.Sprintf("%s~%s~%s", *db, *series, *column)
 	b := []byte(s)

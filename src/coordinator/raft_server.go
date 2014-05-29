@@ -699,3 +699,12 @@ func (self *RaftServer) DropShard(id uint32, serverIds []uint32) error {
 	_, err := self.doOrProxyCommand(command)
 	return err
 }
+
+func (self *RaftServer) GetFieldIdsForSeries(database *string, series []*protocol.Series) ([]*protocol.Series, error) {
+	command := NewCreateSeriesFieldIdsCommand(*database, series)
+	series, err := self.doOrProxyCommand(command)
+	if series == nil || err != nil {
+		return nil, err
+	}
+	return series.([]*protocol.Series), nil
+}

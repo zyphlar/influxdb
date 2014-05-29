@@ -20,6 +20,11 @@ type CoordinatorImpl struct {
 	clusterConfiguration *cluster.ClusterConfiguration
 	raftServer           ClusterConsensus
 	config               *configuration.Configuration
+	metastore            Metastore
+}
+
+type Metastore interface {
+	ReplaceFieldNamesWithFieldIds(database *string, series []*protocol.Series) error
 }
 
 const (
@@ -54,11 +59,16 @@ type SeriesWriter interface {
 	Close()
 }
 
-func NewCoordinatorImpl(config *configuration.Configuration, raftServer ClusterConsensus, clusterConfiguration *cluster.ClusterConfiguration) *CoordinatorImpl {
+func NewCoordinatorImpl(
+	config *configuration.Configuration,
+	raftServer ClusterConsensus,
+	clusterConfiguration *cluster.ClusterConfiguration,
+	metastore Metastore) *CoordinatorImpl {
 	coordinator := &CoordinatorImpl{
 		config:               config,
 		clusterConfiguration: clusterConfiguration,
 		raftServer:           raftServer,
+		metastore:            metastore,
 	}
 
 	return coordinator
@@ -620,7 +630,7 @@ nextfield:
 
 func (self *CoordinatorImpl) CommitSeriesData(db string, serieses []*protocol.Series, sync bool) error {
 	// replace all the field names, or error out if we can't assign the field ids.
-	err := self.replaceFieldNamesWithIds(serieses)
+	err := self.metastore.ReplaceFieldNamesWithFieldIds(&database, serieses)
 	if err != nil {
 		return err
 	}
@@ -693,10 +703,6 @@ func (self *CoordinatorImpl) CommitSeriesData(db string, serieses []*protocol.Se
 	}
 
 	return nil
-}
-
-func (self *CoordinatorImpl) replaceFieldNamesWithIds(series []*protocol.Series) error {
-	// call out to metastore to get ids. if they're not there, call out to raft to get them, or error out
 }
 
 func (self *CoordinatorImpl) write(db string, series []*protocol.Series, shard cluster.Shard, sync bool) error {
