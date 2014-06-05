@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"code.google.com/p/goprotobuf/proto"
 	log "code.google.com/p/log4go"
 )
 
@@ -125,11 +126,6 @@ func (self *ProtobufClient) MakeRequest(request *protocol.Request, responseStrea
 		self.requestBufferLock.Unlock()
 	}
 
-	data, err := request.Encode()
-	if err != nil {
-		return err
-	}
-
 	conn := self.getConnection()
 	if conn == nil {
 		conn = self.reconnect()
@@ -138,13 +134,21 @@ func (self *ProtobufClient) MakeRequest(request *protocol.Request, responseStrea
 		}
 	}
 
+	request.T1 = proto.Int64(time.Now().UnixNano() / 1000)
+	data, err := request.Encode()
+	if err != nil {
+		return err
+	}
+
 	if self.writeTimeout > 0 {
 		conn.SetWriteDeadline(time.Now().Add(self.writeTimeout))
 	}
-	buff := bytes.NewBuffer(make([]byte, 0, len(data)+8))
+	buff := bytes.NewBuffer(nil)
+	buff.Grow(len(data) + 16)
 	binary.Write(buff, binary.LittleEndian, uint32(len(data)))
-	_, err = conn.Write(append(buff.Bytes(), data...))
-
+	buff.Write(data)
+	binary.Write(buff, binary.LittleEndian, time.Now().UnixNano()/1000)
+	_, err = conn.Write(buff.Bytes())
 	if err == nil {
 		return nil
 	}
@@ -187,9 +191,38 @@ func (self *ProtobufClient) readResponses() {
 		if err != nil {
 			log.Error("error unmarshaling response: %s", err)
 			time.Sleep(200 * time.Millisecond)
-		} else {
-			self.sendResponse(response)
+			continue
 		}
+		var t5 int64
+		err = binary.Read(conn, binary.LittleEndian, &t5)
+		if err != nil {
+			log.Error("Error while reading t5: %s", err)
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		response.T5 = &t5
+		response.T6 = proto.Int64(time.Now().UnixNano() / 1000)
+
+		self.sendResponse(response)
+		end := time.Now().UnixNano() / 1000
+		encoding := *response.T2 - *response.T1
+		rt1 := (*response.T3 - *response.T2)
+		p := *response.T4 - *response.T3
+		decoding := *response.T5 - *response.T4
+		rt2 := (*response.T6 - *response.T5)
+		s := end - *response.T6
+		log.Info(
+			"%s received from %s encoding=%s,decoding=%s,p=%s,s=%s,rt1=%s,rt2=%s,rt=%s",
+			response.S(),
+			self.conn.RemoteAddr().String(),
+			time.Duration(encoding*1000),
+			time.Duration(decoding*1000),
+			time.Duration(p*1000),
+			time.Duration(s*1000),
+			time.Duration(rt1*1000),
+			time.Duration(rt2*1000),
+			time.Duration((rt1+rt2)*1000),
+		)
 	}
 }
 

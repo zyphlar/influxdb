@@ -145,7 +145,7 @@ func (self *ClusterServer) heartbeat() {
 			Database: protocol.String(""),
 		}
 		self.MakeRequest(heartbeatRequest, responseChan)
-		err := self.getHeartbeatResponse(responseChan)
+		err := self.getHeartbeatResponse(heartbeatRequest, responseChan)
 		if err != nil {
 			self.handleHeartbeatError(err)
 			continue
@@ -161,7 +161,7 @@ func (self *ClusterServer) heartbeat() {
 	}
 }
 
-func (self *ClusterServer) getHeartbeatResponse(responseChan <-chan *protocol.Response) error {
+func (self *ClusterServer) getHeartbeatResponse(req *protocol.Request, responseChan <-chan *protocol.Response) error {
 	select {
 	case response := <-responseChan:
 		if response.ErrorMessage != nil {
@@ -173,7 +173,7 @@ func (self *ClusterServer) getHeartbeatResponse(responseChan <-chan *protocol.Re
 		}
 
 	case <-time.After(self.HeartbeatInterval):
-		return fmt.Errorf("Server failed to return heartbeat in %s: %d", self.HeartbeatInterval, self.Id)
+		return fmt.Errorf("Server failed to return heartbeat for %d in %s: %d", req.GetId(), self.HeartbeatInterval, self.Id)
 	}
 
 	return nil

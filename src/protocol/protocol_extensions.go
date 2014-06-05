@@ -230,3 +230,12 @@ func (self *FieldValue) GreaterOrEqual(other *FieldValue) bool {
 	}
 	return true
 }
+
+// String() func for request and response
+func (r *Request) S() string {
+	return fmt.Sprintf("%s:%d", r.GetType(), r.GetId())
+}
+
+func (r *Response) S() string {
+	return fmt.Sprintf("%s:%d", r.GetType(), r.GetRequestId())
+}

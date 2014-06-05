@@ -11,7 +11,9 @@ import (
 	"parser"
 	"protocol"
 	"sync"
+	"time"
 
+	"code.google.com/p/goprotobuf/proto"
 	log "code.google.com/p/log4go"
 )
 
@@ -41,6 +43,9 @@ func (self *ProtobufRequestHandler) HandleRequest(request *protocol.Request, con
 		go self.handleQuery(request, conn)
 	case protocol.Request_HEARTBEAT:
 		response := &protocol.Response{RequestId: request.Id, Type: &heartbeatResponse}
+		response.T1 = request.T1
+		response.T2 = request.T2
+		response.T3 = request.T3
 		return self.WriteResponse(conn, response)
 	default:
 		log.Error("unknown request type: %v", request)
@@ -133,15 +138,19 @@ func (self *ProtobufRequestHandler) WriteResponse(conn net.Conn, response *proto
 	self.l.Lock()
 	defer self.l.Unlock()
 
+	response.T4 = proto.Int64(time.Now().UnixNano() / 1000)
 	data, err := response.Encode()
 	if err != nil {
 		log.Error("error encoding response: %s", err)
 		return err
 	}
 
-	buff := bytes.NewBuffer(make([]byte, 0, len(data)+8))
+	buff := bytes.NewBuffer(nil)
+	buff.Grow(len(data) + 16)
 	binary.Write(buff, binary.LittleEndian, uint32(len(data)))
-	_, err = conn.Write(append(buff.Bytes(), data...))
+	buff.Write(data)
+	binary.Write(buff, binary.LittleEndian, time.Now().UnixNano()/1000)
+	_, err = conn.Write(buff.Bytes())
 	if err != nil {
 		log.Error("error writing response: %s", err)
 		return err

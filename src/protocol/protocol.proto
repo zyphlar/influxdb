@@ -44,6 +44,10 @@ message Request {
   optional string user_name = 8;
   optional uint32 request_number = 9;
   optional bool is_db_user = 10;
+  // the request send time in us
+  optional int64 t1 = 11;
+  optional int64 t2 = 12;
+  optional int64 t3 = 13;
 }
 
 message Response {
@@ -71,4 +75,10 @@ message Response {
   optional int64 nextPointTime = 6;
   optional Request request = 7;
   repeated Series multi_series = 8;
+  optional int64 t1 = 11;
+  optional int64 t2 = 12;
+  optional int64 t3 = 13;
+  optional int64 t4 = 14;
+  optional int64 t5 = 15;
+  optional int64 t6 = 16;
 }
