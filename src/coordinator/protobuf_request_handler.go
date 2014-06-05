@@ -10,6 +10,7 @@ import (
 	"net"
 	"parser"
 	"protocol"
+	"sync"
 
 	log "code.google.com/p/log4go"
 )
@@ -18,6 +19,7 @@ type ProtobufRequestHandler struct {
 	coordinator   Coordinator
 	clusterConfig *cluster.ClusterConfiguration
 	writeOk       protocol.Response_Type
+	l             sync.Mutex
 }
 
 var (
@@ -127,6 +129,9 @@ func (self *ProtobufRequestHandler) WriteResponse(conn net.Conn, response *proto
 		response.Series.Points = secondHalfPoints
 		return self.WriteResponse(conn, response)
 	}
+
+	self.l.Lock()
+	defer self.l.Unlock()
 
 	data, err := response.Encode()
 	if err != nil {
