@@ -24,7 +24,7 @@ type CoordinatorImpl struct {
 }
 
 type Metastore interface {
-	ReplaceFieldNamesWithFieldIds(database *string, series []*protocol.Series) error
+	ReplaceFieldNamesWithFieldIds(database string, series []*protocol.Series) error
 }
 
 const (
@@ -630,7 +630,7 @@ nextfield:
 
 func (self *CoordinatorImpl) CommitSeriesData(db string, serieses []*protocol.Series, sync bool) error {
 	// replace all the field names, or error out if we can't assign the field ids.
-	err := self.metastore.ReplaceFieldNamesWithFieldIds(&database, serieses)
+	err := self.metastore.ReplaceFieldNamesWithFieldIds(db, serieses)
 	if err != nil {
 		return err
 	}

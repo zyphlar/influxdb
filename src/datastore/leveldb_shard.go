@@ -30,10 +30,10 @@ type LevelDbShard struct {
 	closed         bool
 	pointBatchSize int
 	writeBatchSize int
-	metaStore      metastore.Store
+	metaStore      *metastore.Store
 }
 
-func NewLevelDbShard(db *levigo.DB, pointBatchSize, writeBatchSize int, metaStore metastore.Store) (*LevelDbShard, error) {
+func NewLevelDbShard(db *levigo.DB, pointBatchSize, writeBatchSize int, metaStore *metastore.Store) (*LevelDbShard, error) {
 	ro := levigo.NewReadOptions()
 	lastIdBytes, err2 := db.Get(ro, NEXT_ID_KEY)
 	if err2 != nil {
@@ -76,6 +76,7 @@ func (self *LevelDbShard) Write(database string, series []*protocol.Series) erro
 			keyBuffer := bytes.NewBuffer(make([]byte, 0, 24))
 			dataBuffer := proto.NewBuffer(nil)
 			for _, point := range s.Points {
+				var err error
 				keyBuffer.Reset()
 				dataBuffer.Reset()
 
@@ -92,7 +93,7 @@ func (self *LevelDbShard) Write(database string, series []*protocol.Series) erro
 					goto check
 				}
 
-				err := dataBuffer.Marshal(point.Values[fieldIndex])
+				err = dataBuffer.Marshal(point.Values[fieldIndex])
 				if err != nil {
 					return err
 				}
@@ -228,7 +229,7 @@ func (self *LevelDbShard) executeQueryForSeries(querySpec *parser.QuerySpec, ser
 				continue
 			}
 
-			if !isPointInRange(fields[i].Id, startTimeBytes, endTimeBytes, key) {
+			if !isPointInRange(fields[i].IdAsBytes(), startTimeBytes, endTimeBytes, key) {
 				continue
 			}
 
@@ -410,22 +411,8 @@ func (self *LevelDbShard) dropSeries(database, series string) error {
 	startTimeBytes := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 	endTimeBytes := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 
-	wb := levigo.NewWriteBatch()
-	defer wb.Close()
-
-	if err := self.deleteRangeOfSeriesCommon(database, series, startTimeBytes, endTimeBytes); err != nil {
-		return err
-	}
-
-	for _, name := range self.metaStore.GetColumnNamesForSeries(database, series) {
-		indexKey := append(SERIES_COLUMN_INDEX_PREFIX, []byte(database+"~"+series+"~"+name)...)
-		wb.Delete(indexKey)
-	}
-
-	wb.Delete(append(DATABASE_SERIES_INDEX_PREFIX, []byte(database+"~"+series)...))
-
-	// remove the column indeces for this time series
-	return self.db.Write(self.writeOptions, wb)
+	err := self.deleteRangeOfSeriesCommon(database, series, startTimeBytes, endTimeBytes)
+	return err
 }
 
 func (self *LevelDbShard) byteArrayForTimeInt(time int64) []byte {
@@ -440,17 +427,7 @@ func (self *LevelDbShard) byteArraysForStartAndEndTimes(startTime, endTime int64
 }
 
 func (self *LevelDbShard) deleteRangeOfSeriesCommon(database, series string, startTimeBytes, endTimeBytes []byte) error {
-	columns := self.metaStore.GetColumnNamesForSeries(database, series)
-	fields, err := self.getFieldsForSeries(database, series, columns)
-	if err != nil {
-		// because a db is distributed across the cluster, it's possible we don't have the series indexed here. ignore
-		switch err := err.(type) {
-		case FieldLookupError:
-			return nil
-		default:
-			return err
-		}
-	}
+	fields := self.metaStore.GetFieldsForSeries(database, series)
 	ro := levigo.NewReadOptions()
 	defer ro.Close()
 	ro.SetFillCache(false)
@@ -461,10 +438,11 @@ func (self *LevelDbShard) deleteRangeOfSeriesCommon(database, series string, sta
 		it := self.db.NewIterator(ro)
 		defer it.Close()
 
-		startKey := append(field.Id, startTimeBytes...)
+		fieldIdBytes := field.IdAsBytes()
+		startKey := append(fieldIdBytes, startTimeBytes...)
 		it.Seek(startKey)
 		if it.Valid() {
-			if !bytes.Equal(it.Key()[:8], field.Id) {
+			if !bytes.Equal(it.Key()[:8], fieldIdBytes) {
 				it.Next()
 				if it.Valid() {
 					startKey = it.Key()
@@ -473,13 +451,13 @@ func (self *LevelDbShard) deleteRangeOfSeriesCommon(database, series string, sta
 		}
 		for it = it; it.Valid(); it.Next() {
 			k := it.Key()
-			if len(k) < 16 || !bytes.Equal(k[:8], field.Id) || bytes.Compare(k[8:16], endTimeBytes) == 1 {
+			if len(k) < 16 || !bytes.Equal(k[:8], fieldIdBytes) || bytes.Compare(k[8:16], endTimeBytes) == 1 {
 				break
 			}
 			wb.Delete(k)
 			count++
 			if count >= self.writeBatchSize {
-				err = self.db.Write(self.writeOptions, wb)
+				err := self.db.Write(self.writeOptions, wb)
 				if err != nil {
 					return err
 				}
@@ -515,36 +493,40 @@ func (self *LevelDbShard) deleteRangeOfRegex(database string, regex *regexp.Rege
 
 // TODO: remove this function. I'm keeping it around for the moment since it'll probably have to be
 //       used in the DB upgrate/migration that moves metadata from the shard to Raft
-func (self *LevelDbShard) getFieldsForSeriesDEPRECATED(db, series string, columns []string) ([]*Field, error) {
+func (self *LevelDbShard) getFieldsForSeriesDEPRECATED(db, series string, columns []string) ([]*metastore.Field, error) {
 	isCountQuery := false
 	if len(columns) > 0 && columns[0] == "*" {
-		columns = self.getColumnNamesForSeries(db, series)
+		columns = self.getColumnNamesForSeriesDEPRECATED(db, series)
 	} else if len(columns) == 0 {
 		isCountQuery = true
-		columns = self.getColumnNamesForSeries(db, series)
+		columns = self.getColumnNamesForSeriesDEPRECATED(db, series)
 	}
 	if len(columns) == 0 {
 		return nil, FieldLookupError{"Coulnd't look up columns for series: " + series}
 	}
 
-	fields := make([]*Field, len(columns), len(columns))
+	fields := make([]*metastore.Field, len(columns), len(columns))
 
 	for i, name := range columns {
-		id, errId := self.getIdForDbSeriesColumn(&db, &series, &name)
+		id, errId := self.getIdForDbSeriesColumnDEPRECATED(&db, &series, &name)
 		if errId != nil {
 			return nil, errId
 		}
 		if id == nil {
 			return nil, FieldLookupError{"Field " + name + " doesn't exist in series " + series}
 		}
-		fields[i] = &Field{Name: name, Id: id}
+		idInt, err := binary.ReadUvarint(bytes.NewBuffer(id))
+		if err != nil {
+			return nil, err
+		}
+		fields[i] = &metastore.Field{Name: name, Id: idInt}
 	}
 
 	// if it's a count query we just want the column that will be the most efficient to
 	// scan through. So find that and return it.
 	if isCountQuery {
 		bestField := fields[0]
-		return []*Field{bestField}, nil
+		return []*metastore.Field{bestField}, nil
 	}
 	return fields, nil
 }
@@ -710,7 +692,7 @@ func (self *LevelDbShard) convertTimestampToUint(t *int64) uint64 {
 	return uint64(*t) + uint64(math.MaxInt64) + uint64(1)
 }
 
-func (self *LevelDbShard) fetchSinglePoint(querySpec *parser.QuerySpec, series string, fields []*Field) (*protocol.Series, error) {
+func (self *LevelDbShard) fetchSinglePoint(querySpec *parser.QuerySpec, series string, fields []*metastore.Field) (*protocol.Series, error) {
 	query := querySpec.SelectQuery()
 	fieldCount := len(fields)
 	fieldNames := make([]string, 0, fieldCount)
@@ -730,9 +712,11 @@ func (self *LevelDbShard) fetchSinglePoint(querySpec *parser.QuerySpec, series s
 
 	timeAndSequenceBytes := timeAndSequenceBuffer.Bytes()
 	for _, field := range fields {
-		pointKey := append(field.Id, timeAndSequenceBytes...)
+		pointKeyBuff := bytes.NewBuffer(make([]byte, 0, 24))
+		pointKeyBuff.Write(field.IdAsBytes())
+		pointKeyBuff.Write(timeAndSequenceBytes)
 
-		if data, err := self.db.Get(self.readOptions, pointKey); err != nil {
+		if data, err := self.db.Get(self.readOptions, pointKeyBuff.Bytes()); err != nil {
 			return nil, err
 		} else {
 			fieldValue := &protocol.FieldValue{}
@@ -752,18 +736,19 @@ func (self *LevelDbShard) fetchSinglePoint(querySpec *parser.QuerySpec, series s
 	return result, nil
 }
 
-func (self *LevelDbShard) getIterators(fields []*Field, start, end []byte, isAscendingQuery bool) (fieldNames []string, iterators []*levigo.Iterator) {
+func (self *LevelDbShard) getIterators(fields []*metastore.Field, start, end []byte, isAscendingQuery bool) (fieldNames []string, iterators []*levigo.Iterator) {
 	iterators = make([]*levigo.Iterator, len(fields))
 	fieldNames = make([]string, len(fields))
 
 	// start the iterators to go through the series data
 	for i, field := range fields {
+		idBytes := field.IdAsBytes()
 		fieldNames[i] = field.Name
 		iterators[i] = self.db.NewIterator(self.readOptions)
 		if isAscendingQuery {
-			iterators[i].Seek(append(field.Id, start...))
+			iterators[i].Seek(append(idBytes, start...))
 		} else {
-			iterators[i].Seek(append(append(field.Id, end...), MAX_SEQUENCE...))
+			iterators[i].Seek(append(append(idBytes, end...), MAX_SEQUENCE...))
 			if iterators[i].Valid() {
 				iterators[i].Prev()
 			}
@@ -777,4 +762,32 @@ func (self *LevelDbShard) convertUintTimestampToInt64(t *uint64) int64 {
 		return int64(*t-math.MaxInt64) - int64(1)
 	}
 	return int64(*t) - math.MaxInt64 - int64(1)
+}
+
+func (self *LevelDbShard) getFieldsForSeries(db, series string, columns []string) ([]*metastore.Field, error) {
+	allFields := self.metaStore.GetFieldsForSeries(db, series)
+	if len(allFields) == 0 {
+		return nil, FieldLookupError{"Coulnd't look up columns for series: " + series}
+	}
+	if len(columns) > 0 && columns[0] == "*" {
+		return allFields, nil
+	}
+
+	fields := make([]*metastore.Field, len(columns), len(columns))
+
+	for _, name := range columns {
+		hasField := false
+		for _, f := range allFields {
+			if f.Name == name {
+				field := f
+				hasField = true
+				fields = append(fields, field)
+				break
+			}
+		}
+		if !hasField {
+			return nil, FieldLookupError{"Field " + name + " doesn't exist in series " + series}
+		}
+	}
+	return fields, nil
 }

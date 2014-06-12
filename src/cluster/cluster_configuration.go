@@ -101,7 +101,8 @@ func NewClusterConfiguration(
 	config *configuration.Configuration,
 	wal WAL,
 	shardStore LocalShardStore,
-	connectionCreator func(string) ServerConnection) *ClusterConfiguration {
+	connectionCreator func(string) ServerConnection,
+	metaStore *metastore.Store) *ClusterConfiguration {
 	return &ClusterConfiguration{
 		DatabaseReplicationFactors: make(map[string]struct{}),
 		clusterAdmins:              make(map[string]*ClusterAdmin),
@@ -118,6 +119,7 @@ func NewClusterConfiguration(
 		shortTermShards:            make([]*ShardData, 0),
 		random:                     rand.New(rand.NewSource(time.Now().UnixNano())),
 		shardsById:                 make(map[uint32]*ShardData, 0),
+		Metastore:                  metaStore,
 	}
 }
 

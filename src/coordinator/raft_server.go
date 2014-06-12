@@ -174,9 +174,7 @@ func SendCommandToServer(url string, command raft.Command) (interface{}, error) 
 		return nil, errors.New(strings.TrimSpace(string(body)))
 	}
 
-	var js interface{}
-	json.Unmarshal(body, &js)
-	return js, err2
+	return body, err2
 
 }
 
@@ -700,11 +698,14 @@ func (self *RaftServer) DropShard(id uint32, serverIds []uint32) error {
 	return err
 }
 
-func (self *RaftServer) GetFieldIdsForSeries(database *string, series []*protocol.Series) ([]*protocol.Series, error) {
-	command := NewCreateSeriesFieldIdsCommand(*database, series)
-	series, err := self.doOrProxyCommand(command)
-	if series == nil || err != nil {
+func (self *RaftServer) GetOrSetFieldIdsForSeries(database string, series []*protocol.Series) ([]*protocol.Series, error) {
+	command := NewCreateSeriesFieldIdsCommand(database, series)
+	result, err := self.doOrProxyCommand(command)
+	if result == nil || err != nil {
 		return nil, err
 	}
-	return series.([]*protocol.Series), nil
+	if x, k := result.([]byte); k {
+		return
+	}
+	return result.([]*protocol.Series), nil
 }

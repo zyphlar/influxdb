@@ -9,8 +9,10 @@ import (
 	"configuration"
 	"coordinator"
 	"datastore"
-	"time"
+	"metastore"
 	"wal"
+
+	"time"
 
 	log "code.google.com/p/log4go"
 )
@@ -33,7 +35,8 @@ type Server struct {
 
 func NewServer(config *configuration.Configuration) (*Server, error) {
 	log.Info("Opening database at %s", config.DataDir)
-	shardDb, err := datastore.NewLevelDbShardDatastore(config)
+	metaStore := metastore.NewStore()
+	shardDb, err := datastore.NewLevelDbShardDatastore(config, metaStore)
 	if err != nil {
 		return nil, err
 	}
@@ -46,13 +49,14 @@ func NewServer(config *configuration.Configuration) (*Server, error) {
 		return nil, err
 	}
 
-	clusterConfig := cluster.NewClusterConfiguration(config, writeLog, shardDb, newClient)
+	clusterConfig := cluster.NewClusterConfiguration(config, writeLog, shardDb, newClient, metaStore)
 	raftServer := coordinator.NewRaftServer(config, clusterConfig)
+	metaStore.SetClusterConsensus(raftServer)
 	clusterConfig.LocalRaftName = raftServer.GetRaftName()
 	clusterConfig.SetShardCreator(raftServer)
 	clusterConfig.CreateFutureShardsAutomaticallyBeforeTimeComes()
 
-	coord := coordinator.NewCoordinatorImpl(config, raftServer, clusterConfig)
+	coord := coordinator.NewCoordinatorImpl(config, raftServer, clusterConfig, metaStore)
 	requestHandler := coordinator.NewProtobufRequestHandler(coord, clusterConfig)
 	protobufServer := coordinator.NewProtobufServer(config.ProtobufListenString(), requestHandler)
 

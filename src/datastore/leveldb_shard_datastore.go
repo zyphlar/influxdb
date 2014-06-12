@@ -30,7 +30,7 @@ type LevelDbShardDatastore struct {
 	maxOpenShards  int
 	pointBatchSize int
 	writeBatchSize int
-	metaStore      metastore.Store
+	metaStore      *metastore.Store
 }
 
 const (
@@ -58,18 +58,13 @@ var (
 	TRUE = true
 )
 
-type Field struct {
-	Id   []byte
-	Name string
-}
-
 type rawColumnValue struct {
 	time     []byte
 	sequence []byte
 	value    []byte
 }
 
-func NewLevelDbShardDatastore(config *configuration.Configuration, metaStore metastore.Store) (*LevelDbShardDatastore, error) {
+func NewLevelDbShardDatastore(config *configuration.Configuration, metaStore *metastore.Store) (*LevelDbShardDatastore, error) {
 	baseDbDir := filepath.Join(config.DataDir, SHARD_DATABASE_DIR)
 	err := os.MkdirAll(baseDbDir, 0744)
 	if err != nil {
