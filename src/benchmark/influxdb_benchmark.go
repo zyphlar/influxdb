@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/influxdb/influxdb-go"
+	influxdb "github.com/influxdb/influxdb-go"
 )
 
 type benchmarkConfig struct {
@@ -144,6 +144,7 @@ func main() {
 	harness := NewBenchmarkHarness(&conf)
 
 	startTime := time.Now()
+	harness.Setup()
 	harness.Run()
 	elapsed := time.Now().Sub(startTime)
 
@@ -204,6 +205,35 @@ func NewBenchmarkHarness(conf *benchmarkConfig) *BenchmarkHarness {
 	return harness
 }
 
+func (self *BenchmarkHarness) Setup() {
+	createDatabase(self.reportClient(), self.Config.StatsServer.Database)
+	createDatabase(self.clusterClient(0), self.Config.ClusterCredentials.Database)
+}
+
+func createDatabase(c *influxdb.Client, db string) error {
+	dbs, err := c.GetDatabaseList()
+	if err != nil {
+		fmt.Errorf("Cannot create %s", db)
+	}
+	found := false
+	for _, database := range dbs {
+		if database["name"].(string) == db {
+			found = true
+			break
+		}
+	}
+
+	if found {
+		return nil
+	}
+
+	err = c.CreateDatabase(db)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (self *BenchmarkHarness) Run() {
 	for _, loadDef := range self.Config.LoadDefinitions {
 		self.Add(1)
@@ -234,7 +264,10 @@ func (self *BenchmarkHarness) reportClient() *influxdb.Client {
 		IsSecure:   self.Config.StatsServer.IsSecure,
 		HttpClient: NewHttpClient(self.Config.StatsServer.Timeout.Duration, self.Config.StatsServer.SkipVerify),
 	}
-	client, _ := influxdb.NewClient(clientConfig)
+	client, err := influxdb.NewClient(clientConfig)
+	if err != nil {
+		panic(err)
+	}
 	return client
 }
 
@@ -395,8 +428,8 @@ func (self *BenchmarkHarness) runQuery(loadDef *loadDefinition, seriesNames []st
 	}
 }
 
-func (self *BenchmarkHarness) queryAndReport(loadDef *loadDefinition, q *query, queryString string) {
-	s := self.Config.Servers[rand.Intn(len(self.Config.Servers))]
+func (self *BenchmarkHarness) clusterClient(n int) *influxdb.Client {
+	s := self.Config.Servers[n]
 	clientConfig := &influxdb.ClientConfig{
 		Host:       s.ConnectionString,
 		Database:   self.Config.ClusterCredentials.Database,
@@ -407,8 +440,13 @@ func (self *BenchmarkHarness) queryAndReport(loadDef *loadDefinition, q *query, 
 	}
 	client, err := influxdb.NewClient(clientConfig)
 	if err != nil {
-		// report query fail
+		panic(err)
 	}
+	return client
+}
+
+func (self *BenchmarkHarness) queryAndReport(loadDef *loadDefinition, q *query, queryString string) {
+	client := self.clusterClient(rand.Intn(len(self.Config.Servers)))
 	startTime := time.Now()
 	results, err := client.Query(queryString)
 	microsecondsTaken := time.Now().Sub(startTime).Nanoseconds() / 1000
