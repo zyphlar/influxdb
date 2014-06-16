@@ -56,18 +56,20 @@ func (self *WriteBuffer) HasUncommitedWrites() bool {
 // floor and let the background goroutine replay from the WAL
 func (self *WriteBuffer) Write(request *protocol.Request) {
 	self.shardLastRequestNumber[request.GetShardId()] = request.GetRequestNumber()
-	select {
-	case self.writes <- request:
-		log.Debug("Buffering %d:%d for %s", request.GetRequestNumber(), request.GetShardId(), self.writerInfo)
-		return
-	default:
-		select {
-		case self.stoppedWrites <- *request.RequestNumber:
-			return
-		default:
-			return
-		}
-	}
+	self.writes <- request
+	log.Debug("Buffering %d:%d for %s", request.GetRequestNumber(), request.GetShardId(), self.writerInfo)
+	return
+	// select {
+	// case
+	// 	return
+	// default:
+	// 	select {
+	// 	case self.stoppedWrites <- *request.RequestNumber:
+	// 		return
+	// 	default:
+	// 		return
+	// 	}
+	// }
 }
 
 func (self *WriteBuffer) handleWrites() {
