@@ -174,8 +174,8 @@ func (self *ShardDatastore) GetOrCreateShard(id uint32) (cluster.LocalShardDb, e
 		return nil, err
 	}
 	c := init.NewConfig()
-	conf := self.config.StorageEngineConfigs[engine]
-	if err := toml.PrimitiveDecode(conf, c); conf != nil && err != nil {
+	conf, ok := self.config.StorageEngineConfigs[engine]
+	if err := toml.PrimitiveDecode(conf, c); ok && err != nil {
 		return nil, err
 	}
 
