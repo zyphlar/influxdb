@@ -22,10 +22,14 @@ func main() {
 	flag.Parse()
 
 	os.RemoveAll("/tmp/test-ldb")
-	os.RemoveAll("/tmp/test-mdb")
+	os.RemoveAll("/tmp/test-lmdb")
+	os.RemoveAll("/tmp/test-rocksdb")
+	os.RemoveAll("/tmp/test-hyperleveldb")
 
-	benchmark("mdb", Config{*points, *batchSize, *series, 0, 0, time.Now()})
+	benchmark("lmdb", Config{*points, *batchSize, *series, 0, 0, time.Now()})
 	benchmark("leveldb", Config{*points, *batchSize, *series, 0, 0, time.Now()})
+	benchmark("rocksdb", Config{*points, *batchSize, *series, 0, 0, time.Now()})
+	benchmark("hyperleveldb", Config{*points, *batchSize, *series, 0, 0, time.Now()})
 }
 
 func benchmark(name string, c Config) {
