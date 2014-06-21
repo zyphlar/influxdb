@@ -80,7 +80,7 @@ func (self *LevelDbShard) Write(database string, series []*protocol.Series) erro
 				keyBuffer.Reset()
 				dataBuffer.Reset()
 
-				binary.Write(keyBuffer, binary.BigEndian, &id)
+				binary.Write(keyBuffer, binary.LittleEndian, &id)
 				timestamp := self.convertTimestampToUint(point.GetTimestampInMicroseconds())
 				// pass the uint64 by reference so binary.Write() doesn't create a new buffer
 				// see the source code for intDataSize() in binary.go
@@ -97,6 +97,7 @@ func (self *LevelDbShard) Write(database string, series []*protocol.Series) erro
 				if err != nil {
 					return err
 				}
+				fmt.Println("WRITE: ", pointKey, dataBuffer.Bytes())
 				wb.Put(pointKey, dataBuffer.Bytes())
 			check:
 				count++
@@ -155,7 +156,7 @@ func (self *LevelDbShard) Query(querySpec *parser.QuerySpec, processor cluster.Q
 func (self *LevelDbShard) DropDatabase(database string) error {
 	seriesNames := self.metaStore.GetSeriesForDatabase(database)
 	for _, name := range seriesNames {
-		if err := self.dropSeries(database, name); err != nil {
+		if err := self.DropSeries(database, name); err != nil {
 			log.Error("DropDatabase: ", err)
 			return err
 		}
@@ -183,6 +184,9 @@ func (self *LevelDbShard) executeQueryForSeries(querySpec *parser.QuerySpec, ser
 			log.Error("Error looking up fields for %s: %s", seriesName, err)
 			return fmt.Errorf("Error looking up fields for %s: %s", seriesName, err)
 		}
+	}
+	for _, f := range fields {
+		fmt.Println("QUERY field: ", f)
 	}
 
 	fieldCount := len(fields)
@@ -225,6 +229,7 @@ func (self *LevelDbShard) executeQueryForSeries(querySpec *parser.QuerySpec, ser
 			}
 
 			key := it.Key()
+			fmt.Println("KEY: ", key)
 			if len(key) < 16 {
 				continue
 			}
@@ -238,6 +243,7 @@ func (self *LevelDbShard) executeQueryForSeries(querySpec *parser.QuerySpec, ser
 
 			rawTime := key[8:16]
 			rawColumnValues[i] = rawColumnValue{time: rawTime, sequence: sequenceNumber, value: value}
+			fmt.Println("QUERY raw col value: ", rawTime, sequenceNumber, value)
 		}
 
 		var pointTimeRaw []byte
@@ -318,6 +324,7 @@ func (self *LevelDbShard) executeQueryForSeries(querySpec *parser.QuerySpec, ser
 					Fields: fieldNames,
 					Points: seriesOutgoing.Points,
 				}
+				fmt.Println("&&&- ", series)
 				if !processor.YieldSeries(series) {
 					log.Info("Stopping processing")
 					shouldContinue = false
@@ -335,6 +342,7 @@ func (self *LevelDbShard) executeQueryForSeries(querySpec *parser.QuerySpec, ser
 	for _, alias := range aliases {
 		log.Debug("Final Flush %s", alias)
 		series := &protocol.Series{Name: protocol.String(alias), Fields: seriesOutgoing.Fields, Points: seriesOutgoing.Points}
+		fmt.Println("&&&- ", series)
 		if !processor.YieldSeries(series) {
 			log.Debug("Cancelled...")
 		}
@@ -399,7 +407,7 @@ func (self *LevelDbShard) executeDeleteQuery(querySpec *parser.QuerySpec, proces
 func (self *LevelDbShard) executeDropSeriesQuery(querySpec *parser.QuerySpec, processor cluster.QueryProcessor) error {
 	database := querySpec.Database()
 	series := querySpec.Query().DropSeriesQuery.GetTableName()
-	err := self.dropSeries(database, series)
+	err := self.DropSeries(database, series)
 	if err != nil {
 		return err
 	}
@@ -407,7 +415,7 @@ func (self *LevelDbShard) executeDropSeriesQuery(querySpec *parser.QuerySpec, pr
 	return nil
 }
 
-func (self *LevelDbShard) dropSeries(database, series string) error {
+func (self *LevelDbShard) DropSeries(database, series string) error {
 	startTimeBytes := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 	endTimeBytes := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 
@@ -746,8 +754,10 @@ func (self *LevelDbShard) getIterators(fields []*metastore.Field, start, end []b
 		fieldNames[i] = field.Name
 		iterators[i] = self.db.NewIterator(self.readOptions)
 		if isAscendingQuery {
+			fmt.Println("ITERATOR: ", append(idBytes, start...))
 			iterators[i].Seek(append(idBytes, start...))
 		} else {
+			fmt.Println("ITERATOR desc: ", append(append(idBytes, end...), MAX_SEQUENCE...))
 			iterators[i].Seek(append(append(idBytes, end...), MAX_SEQUENCE...))
 			if iterators[i].Valid() {
 				iterators[i].Prev()
@@ -766,6 +776,7 @@ func (self *LevelDbShard) convertUintTimestampToInt64(t *uint64) int64 {
 
 func (self *LevelDbShard) getFieldsForSeries(db, series string, columns []string) ([]*metastore.Field, error) {
 	allFields := self.metaStore.GetFieldsForSeries(db, series)
+	fmt.Println("ALLFIELDS: ", allFields)
 	if len(allFields) == 0 {
 		return nil, FieldLookupError{"Coulnd't look up columns for series: " + series}
 	}
@@ -775,13 +786,13 @@ func (self *LevelDbShard) getFieldsForSeries(db, series string, columns []string
 
 	fields := make([]*metastore.Field, len(columns), len(columns))
 
-	for _, name := range columns {
+	for i, name := range columns {
 		hasField := false
 		for _, f := range allFields {
 			if f.Name == name {
 				field := f
 				hasField = true
-				fields = append(fields, field)
+				fields[i] = field
 				break
 			}
 		}

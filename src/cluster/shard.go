@@ -112,6 +112,7 @@ type LocalShardDb interface {
 	Write(database string, series []*p.Series) error
 	Query(*parser.QuerySpec, QueryProcessor) error
 	DropDatabase(database string) error
+	DropSeries(database, series string) error
 	IsClosed() bool
 }
 
@@ -177,6 +178,17 @@ func (self *ShardData) SetLocalStore(store LocalShardStore, localServerId uint32
 
 func (self *ShardData) ServerIds() []uint32 {
 	return self.serverIds
+}
+
+func (self *ShardData) DropSeries(database, series string) error {
+	if !self.IsLocal {
+		return nil
+	}
+	shard, err := self.store.GetOrCreateShard(self.id)
+	if err != nil {
+		return err
+	}
+	return shard.DropSeries(database, series)
 }
 
 func (self *ShardData) SyncWrite(request *p.Request) error {

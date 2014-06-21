@@ -73,10 +73,11 @@ func (self *Store) ReplaceFieldNamesWithFieldIds(database string, series []*prot
 	if err != nil {
 		return err
 	}
-	fmt.Println("******", seriesWithFieldIds[0:5])
+	fmt.Println("******", seriesWithFieldIds[0:1])
 	self.fillCache(database, seriesWithFieldIds)
-	fmt.Println("cacheFilled", seriesWithFieldIds[0:5])
+	fmt.Println("cacheFilled", seriesWithFieldIds[0:1])
 	for i, s := range series {
+		fmt.Println("..... ", s, seriesWithFieldIds[i].FieldIds)
 		s.Fields = nil
 		s.FieldIds = seriesWithFieldIds[i].FieldIds
 	}
@@ -113,11 +114,33 @@ func (self *Store) GetOrSetFieldIds(database string, series []*protocol.Series) 
 }
 
 func (self *Store) GetSeriesForDatabaseAndRegex(database string, regex *regexp.Regexp) []string {
-	return nil
+	self.fieldsLock.RLock()
+	defer self.fieldsLock.RUnlock()
+	databaseSeries, ok := self.StringsToIds[database]
+	if !ok {
+		return nil
+	}
+	matchingSeries := make([]string, 0)
+	for series, _ := range databaseSeries {
+		if regex.MatchString(series) {
+			matchingSeries = append(matchingSeries, series)
+		}
+	}
+	return matchingSeries
 }
 
 func (self *Store) GetSeriesForDatabase(database string) []string {
-	return nil
+	self.fieldsLock.RLock()
+	defer self.fieldsLock.RUnlock()
+	databaseSeries, ok := self.StringsToIds[database]
+	if !ok {
+		return nil
+	}
+	series := make([]string, len(databaseSeries))
+	for s, _ := range databaseSeries {
+		series = append(series, s)
+	}
+	return series
 }
 
 func (self *Store) GetFieldsForSeries(database, series string) []*Field {
@@ -135,8 +158,14 @@ func (self *Store) GetFieldsForSeries(database, series string) []*Field {
 	return fields
 }
 
-func (self *Store) DropSeries(database, series string) {
-
+func (self *Store) DropSeries(database, series string) error {
+	self.fieldsLock.Lock()
+	defer self.fieldsLock.Unlock()
+	databaseSeries := self.StringsToIds[database]
+	if databaseSeries != nil {
+		delete(databaseSeries, series)
+	}
+	return nil
 }
 
 func (self *Store) DropDatabase(database string) {
@@ -152,6 +181,7 @@ func (self *Store) fillCache(database string, series []*protocol.Series) {
 		self.StringsToIds[database] = databaseSeries
 	}
 	for _, s := range series {
+		fmt.Println("** fillCache: ", s)
 		seriesFields, ok := databaseSeries[*s.Name]
 		if !ok {
 			seriesFields = make(map[string]uint64)

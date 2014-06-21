@@ -70,14 +70,34 @@ func (self *SingleServerSuite) TestListSeriesAfterDropSeries(c *C) {
 	data[0].Points[0] = append(data[0].Points[0], 1382819388)
 	c.Assert(client.WriteSeriesWithTimePrecision(data, "s"), IsNil)
 	series, err := client.Query("list series")
+	for _, s := range series {
+		fmt.Println("TEST: ", s)
+	}
 	c.Assert(err, IsNil)
 	c.Assert(series, HasLen, 1)
-	c.Assert(series[0].Name, Equals, "test_drop_series")
+	c.Assert(series[0].Name, Equals, "list_series_result")
+
+	hasSeries := false
+	for _, p := range series[0].Points {
+		if p[1].(string) == "test_drop_series" {
+			hasSeries = true
+			break
+		}
+	}
+	c.Assert(hasSeries, Equals, true)
+
 	_, err = client.Query("drop series test_drop_series")
 	c.Assert(err, IsNil)
 	series, err = client.Query("list series")
-	c.Assert(err, IsNil)
-	c.Assert(series, HasLen, 0)
+
+	hasSeries = false
+	for _, p := range series[0].Points {
+		if p[1].(string) == "test_drop_series" {
+			hasSeries = true
+			break
+		}
+	}
+	c.Assert(hasSeries, Equals, false)
 }
 
 // issue #497
@@ -207,7 +227,7 @@ func (self *SingleServerSuite) TestUserWritePermissions(c *C) {
 
 	// create two users one that can only read and one that can only write. both can access test_should_read
 	// series only
-	/* c.Assert(rootUser.CreateDatabase("db1"), IsNil) */
+	rootUser.CreateDatabase("db1")
 	c.Assert(rootUser.CreateDatabaseUser("db1", "limited_user", "pass", "^$", "^$"), IsNil)
 
 	config := &influxdb.ClientConfig{
@@ -268,7 +288,7 @@ func (self *SingleServerSuite) TestUserReadPermissions(c *C) {
 
 	// create two users one that can only read and one that can only write. both can access test_should_read
 	// series only
-	c.Assert(rootUser.CreateDatabase("db1"), IsNil)
+	rootUser.CreateDatabase("db1")
 	c.Assert(rootUser.CreateDatabaseUser("db1", "limited_user2", "pass", "test_should_read", "^$"), IsNil)
 
 	data := `

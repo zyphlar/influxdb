@@ -32,6 +32,7 @@ func init() {
 		&CreateShardsCommand{},
 		&DropShardCommand{},
 		&CreateSeriesFieldIdsCommand{},
+		&DropSeriesCommand{},
 	} {
 		internalRaftCommands[command.CommandName()] = command
 	}
@@ -370,4 +371,23 @@ func (c *CreateSeriesFieldIdsCommand) Apply(server raft.Server) (interface{}, er
 	config := server.Context().(*cluster.ClusterConfiguration)
 	err := config.Metastore.GetOrSetFieldIds(c.Database, c.Series)
 	return c.Series, err
+}
+
+type DropSeriesCommand struct {
+	Database string
+	Series   string
+}
+
+func NewDropSeriesCommand(database, series string) *DropSeriesCommand {
+	return &DropSeriesCommand{Database: database, Series: series}
+}
+
+func (c *DropSeriesCommand) CommandName() string {
+	return "drop_series"
+}
+
+func (c *DropSeriesCommand) Apply(server raft.Server) (interface{}, error) {
+	config := server.Context().(*cluster.ClusterConfiguration)
+	err := config.DropSeries(c.Database, c.Series)
+	return nil, err
 }

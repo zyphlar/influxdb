@@ -993,6 +993,20 @@ func (self *ClusterConfiguration) DropShard(shardId uint32, serverIds []uint32) 
 	return nil
 }
 
+func (self *ClusterConfiguration) DropSeries(database, series string) error {
+	err := self.Metastore.DropSeries(database, series)
+	if err != nil {
+		return err
+	}
+	go func(database, series string) {
+		shards := self.GetAllShards()
+		for _, s := range shards {
+			s.DropSeries(database, series)
+		}
+	}(database, series)
+	return nil
+}
+
 func (self *ClusterConfiguration) RecoverFromWAL() error {
 	writeBuffer := NewWriteBuffer("local", self.shardStore, self.wal, self.LocalServer.Id, self.config.LocalStoreWriteBufferSize)
 	self.writeBuffers = append(self.writeBuffers, writeBuffer)

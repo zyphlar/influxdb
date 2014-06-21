@@ -705,7 +705,20 @@ func (self *RaftServer) GetOrSetFieldIdsForSeries(database string, series []*pro
 		return nil, err
 	}
 	if x, k := result.([]byte); k {
-		return
+		fmt.Println("+++ RAFT: ", string(x))
+		s := []*protocol.Series{}
+		err := json.Unmarshal(x, &s)
+		if err != nil {
+			return nil, err
+		}
+		return s, nil
 	}
+	fmt.Println("--- RAFT: ", result.([]*protocol.Series))
 	return result.([]*protocol.Series), nil
+}
+
+func (self *RaftServer) DropSeries(database, series string) error {
+	command := NewDropSeriesCommand(database, series)
+	_, err := self.doOrProxyCommand(command)
+	return err
 }
