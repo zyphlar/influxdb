@@ -70,9 +70,6 @@ func (self *SingleServerSuite) TestListSeriesAfterDropSeries(c *C) {
 	data[0].Points[0] = append(data[0].Points[0], 1382819388)
 	c.Assert(client.WriteSeriesWithTimePrecision(data, "s"), IsNil)
 	series, err := client.Query("list series")
-	for _, s := range series {
-		fmt.Println("TEST: ", s)
-	}
 	c.Assert(err, IsNil)
 	c.Assert(series, HasLen, 1)
 	c.Assert(series[0].Name, Equals, "list_series_result")
@@ -340,16 +337,12 @@ func (self *SingleServerSuite) TestAdminPermissionToDeleteData(c *C) {
     "name": "test_delete_admin_permission",
     "columns": ["val_1", "val_2"]
   }]`
-	fmt.Println("TESTAD writing")
 	self.server.WriteData(data, c)
-	fmt.Println("TESTAD query root")
 	series := self.server.RunQueryAsRoot("select count(val_1) from test_delete_admin_permission", "s", c)
 	c.Assert(series[0].Points, HasLen, 1)
 	c.Assert(series[0].Points[0][1], Equals, float64(1))
 
-	fmt.Println("TESTAD deleting")
 	_ = self.server.RunQueryAsRoot("delete from test_delete_admin_permission", "s", c)
-	fmt.Println("TESTAD query")
 	series = self.server.RunQueryAsRoot("select count(val_1) from test_delete_admin_permission", "s", c)
 	c.Assert(series, HasLen, 0)
 }
@@ -376,7 +369,6 @@ func (self *SingleServerSuite) TestDeletingNewDatabase(c *C) {
 	s := CreatePoints("data_resurrection", 1, 10)
 	self.server.WriteData(s, c)
 	self.server.WaitForServerToSync()
-	fmt.Printf("wrote some data\n")
 
 	for i := 0; i < 2; i++ {
 		c.Assert(client.CreateDatabase("delete1"), IsNil)
@@ -408,7 +400,6 @@ func (self *SingleServerSuite) TestDataResurrectionAfterRestart(c *C) {
 	s := CreatePoints("data_resurrection", 1, 10)
 	self.server.WriteData(s, c)
 	self.server.WaitForServerToSync()
-	fmt.Printf("wrote some data\n")
 	series := self.server.RunQuery("select count(column0) from data_resurrection", "s", c)
 	c.Assert(series, HasLen, 1)
 	c.Assert(series[0].Points[0][1], Equals, 10.0)

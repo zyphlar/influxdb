@@ -3,7 +3,6 @@ package metastore
 import (
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"sync"
 
@@ -73,11 +72,8 @@ func (self *Store) ReplaceFieldNamesWithFieldIds(database string, series []*prot
 	if err != nil {
 		return err
 	}
-	fmt.Println("******", seriesWithFieldIds[0:1])
 	self.fillCache(database, seriesWithFieldIds)
-	fmt.Println("cacheFilled", seriesWithFieldIds[0:1])
 	for i, s := range series {
-		fmt.Println("..... ", s, seriesWithFieldIds[i].FieldIds)
 		s.Fields = nil
 		s.FieldIds = seriesWithFieldIds[i].FieldIds
 	}
@@ -200,7 +196,6 @@ func (self *Store) fillCache(database string, series []*protocol.Series) {
 		self.StringsToIds[database] = databaseSeries
 	}
 	for _, s := range series {
-		fmt.Println("** fillCache: ", s)
 		seriesFields, ok := databaseSeries[*s.Name]
 		if !ok {
 			seriesFields = make(map[string]uint64)
