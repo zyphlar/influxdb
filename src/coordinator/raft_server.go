@@ -187,6 +187,14 @@ func (s *RaftServer) CreateDatabase(name string) error {
 func (s *RaftServer) DropDatabase(name string) error {
 	command := NewDropDatabaseCommand(name)
 	_, err := s.doOrProxyCommand(command)
+	// TODO: Dropping database from the metastore is synchronous, but the underlying data
+	//       delete is asynchronous. If the server crashes or restarts while this is happening
+	//       there will be orphaned data sitting around. Not a huge deal, but we should fix this
+	//       at some point.
+	// force a log compaction because we don't want this replaying after a server restarts
+	if err == nil {
+		err = s.ForceLogCompaction()
+	}
 	return err
 }
 
@@ -718,5 +726,14 @@ func (self *RaftServer) GetOrSetFieldIdsForSeries(database string, series []*pro
 func (self *RaftServer) DropSeries(database, series string) error {
 	command := NewDropSeriesCommand(database, series)
 	_, err := self.doOrProxyCommand(command)
+
+	// TODO: Dropping series from the metastore is synchronous, but the underlying data
+	//       delete is asynchronous. If the server crashes or restarts while this is happening
+	//       there will be orphaned data sitting around. Not a huge deal, but we should fix this
+	//       at some point.
+	// force a log compaction because we don't want this replaying after a server restarts
+	if err == nil {
+		err = self.ForceLogCompaction()
+	}
 	return err
 }
