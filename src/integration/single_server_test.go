@@ -431,7 +431,8 @@ func (self *SingleServerSuite) TestDataResurrectionAfterRestart(c *C) {
 	series = self.server.RunQuery("select count(column0) from data_resurrection", "s", c)
 	c.Assert(series, HasLen, 0)
 	series = self.server.RunQuery("list series", "s", c)
-	c.Assert(series, HasLen, 0)
+	c.Assert(series, HasLen, 1)
+	c.Assert(series[0].Points, HasLen, 0)
 }
 
 // issue #360

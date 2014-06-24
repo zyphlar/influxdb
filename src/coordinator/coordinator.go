@@ -11,7 +11,6 @@ import (
 	"protocol"
 	"regexp"
 	"strings"
-	"sync"
 
 	log "code.google.com/p/log4go"
 )
@@ -783,20 +782,7 @@ func (self *CoordinatorImpl) DropDatabase(user common.User, db string) error {
 		return err
 	}
 
-	if err := self.raftServer.DropDatabase(db); err != nil {
-		return err
-	}
-
-	var wait sync.WaitGroup
-	for _, shard := range self.clusterConfiguration.GetAllShards() {
-		wait.Add(1)
-		go func(shard *cluster.ShardData) {
-			shard.DropDatabase(db, true)
-			wait.Done()
-		}(shard)
-	}
-	wait.Wait()
-	return nil
+	return self.raftServer.DropDatabase(db)
 }
 
 func (self *CoordinatorImpl) AuthenticateDbUser(db, username, password string) (common.User, error) {

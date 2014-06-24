@@ -32,9 +32,6 @@ func NewProtobufRequestHandler(coordinator Coordinator, clusterConfig *cluster.C
 func (self *ProtobufRequestHandler) HandleRequest(request *protocol.Request, conn net.Conn) error {
 	if *request.Type == protocol.Request_WRITE {
 		go self.handleWrites(request, conn)
-	} else if *request.Type == protocol.Request_DROP_DATABASE {
-		go self.handleDropDatabase(request, conn)
-		return nil
 	} else if *request.Type == protocol.Request_QUERY {
 		go self.handleQuery(request, conn)
 	} else if *request.Type == protocol.Request_HEARTBEAT {
@@ -105,13 +102,6 @@ func (self *ProtobufRequestHandler) handleQuery(request *protocol.Request, conn 
 			return
 		}
 	}
-}
-
-func (self *ProtobufRequestHandler) handleDropDatabase(request *protocol.Request, conn net.Conn) {
-	shard := self.clusterConfig.GetLocalShardById(*request.ShardId)
-	shard.DropDatabase(*request.Database, false)
-	response := &protocol.Response{Type: &endStreamResponse, RequestId: request.Id}
-	self.WriteResponse(conn, response)
 }
 
 func (self *ProtobufRequestHandler) WriteResponse(conn net.Conn, response *protocol.Response) error {

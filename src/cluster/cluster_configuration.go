@@ -306,6 +306,15 @@ func (self *ClusterConfiguration) DropDatabase(name string) error {
 	defer self.usersLock.Unlock()
 
 	delete(self.dbUsers, name)
+
+	fields := self.Metastore.GetFieldsForDatabase(name)
+	self.Metastore.DropDatabase(name)
+	go func() {
+		shards := self.GetAllShards()
+		for _, s := range shards {
+			s.DropFields(fields)
+		}
+	}()
 	return nil
 }
 
@@ -994,16 +1003,20 @@ func (self *ClusterConfiguration) DropShard(shardId uint32, serverIds []uint32) 
 }
 
 func (self *ClusterConfiguration) DropSeries(database, series string) error {
+	fields := self.Metastore.GetFieldsForSeries(database, series)
+	if fields == nil {
+		return fmt.Errorf("Couldn't lookup field ids for database %s and series %s", database, series)
+	}
 	err := self.Metastore.DropSeries(database, series)
 	if err != nil {
 		return err
 	}
-	go func(database, series string) {
+	go func() {
 		shards := self.GetAllShards()
 		for _, s := range shards {
-			s.DropSeries(database, series)
+			s.DropFields(fields)
 		}
-	}(database, series)
+	}()
 	return nil
 }
 

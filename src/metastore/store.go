@@ -143,6 +143,22 @@ func (self *Store) GetSeriesForDatabase(database string) []string {
 	return series
 }
 
+func (self *Store) GetFieldsForDatabase(database string) []*Field {
+	self.fieldsLock.RLock()
+	defer self.fieldsLock.RUnlock()
+	fields := make([]*Field, 0)
+	databaseSeries, ok := self.StringsToIds[database]
+	if !ok {
+		return nil
+	}
+	for _, series := range databaseSeries {
+		for fieldName, fieldId := range series {
+			fields = append(fields, &Field{Id: fieldId, Name: fieldName})
+		}
+	}
+	return fields
+}
+
 func (self *Store) GetFieldsForSeries(database, series string) []*Field {
 	self.fieldsLock.RLock()
 	defer self.fieldsLock.RUnlock()
@@ -168,8 +184,11 @@ func (self *Store) DropSeries(database, series string) error {
 	return nil
 }
 
-func (self *Store) DropDatabase(database string) {
-
+func (self *Store) DropDatabase(database string) error {
+	self.fieldsLock.Lock()
+	defer self.fieldsLock.Unlock()
+	delete(self.StringsToIds, database)
+	return nil
 }
 
 func (self *Store) fillCache(database string, series []*protocol.Series) {
