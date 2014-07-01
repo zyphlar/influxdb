@@ -687,17 +687,20 @@ func (self *RaftServer) CreateShards(shards []*cluster.NewShardData) ([]*cluster
 		log.Error("RAFT: CreateShards: ", err)
 		return nil, err
 	}
-	js, err := json.Marshal(createShardsResult)
-	if err != nil {
-		return nil, err
+	if x, k := createShardsResult.([]byte); k {
+		newShards := make([]*cluster.NewShardData, 0)
+		err = json.Unmarshal(x, &newShards)
+		if err != nil {
+			log.Error("RAFT: error parsing new shard result: ", err)
+			return nil, err
+		}
+		return self.clusterConfig.MarshalNewShardArrayToShards(newShards)
 	}
-	newShards := make([]*cluster.NewShardData, 0)
-	err = json.Unmarshal(js, &newShards)
-	if err != nil {
-		return nil, err
+	if x, k := createShardsResult.([]*cluster.NewShardData); k {
+		return self.clusterConfig.MarshalNewShardArrayToShards(x)
 	}
-	log.Debug("NEW SHARDS: ", newShards)
-	return self.clusterConfig.MarshalNewShardArrayToShards(newShards)
+
+	return nil, fmt.Errorf("Unable to marshal Raft AddShards result!")
 }
 
 func (self *RaftServer) DropShard(id uint32, serverIds []uint32) error {
@@ -720,7 +723,10 @@ func (self *RaftServer) GetOrSetFieldIdsForSeries(database string, series []*pro
 		}
 		return s, nil
 	}
-	return result.([]*protocol.Series), nil
+	if x, k := result.([]*protocol.Series); k {
+		return x, nil
+	}
+	return nil, nil
 }
 
 func (self *RaftServer) DropSeries(database, series string) error {
