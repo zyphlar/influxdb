@@ -164,7 +164,6 @@ func (self *CoordinatorImpl) runQuery(querySpec *parser.QuerySpec, seriesWriter 
 
 func (self *CoordinatorImpl) runListSeriesQuery(querySpec *parser.QuerySpec, seriesWriter SeriesWriter) error {
 	series := self.clusterConfiguration.Metastore.GetSeriesForDatabase(querySpec.Database())
-	fmt.Println("SERIES: ", strings.Join(series, ","))
 	name := "list_series_result"
 	fields := []string{"name"}
 	points := make([]*protocol.Point, len(series), len(series))
