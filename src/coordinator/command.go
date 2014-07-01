@@ -367,6 +367,18 @@ func (c *CreateSeriesFieldIdsCommand) CommandName() string {
 	return "create_series_field_ids"
 }
 
+// TODO: Encode/Decode are not needed once this pr
+// https://github.com/goraft/raft/pull/221 is merged in and our goraft
+// is updated to a commit that includes the pr
+
+func (c *CreateSeriesFieldIdsCommand) Encode(w io.Writer) error {
+	return json.NewEncoder(w).Encode(c)
+}
+
+func (c *CreateSeriesFieldIdsCommand) Decode(r io.Reader) error {
+	return json.NewDecoder(r).Decode(c)
+}
+
 func (c *CreateSeriesFieldIdsCommand) Apply(server raft.Server) (interface{}, error) {
 	config := server.Context().(*cluster.ClusterConfiguration)
 	err := config.Metastore.GetOrSetFieldIds(c.Database, c.Series)
