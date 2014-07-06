@@ -1,8 +1,10 @@
 package integration
 
 import (
+	"encoding/json"
 	"engine"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"time"
@@ -67,7 +69,7 @@ func (self *DataTestSuite) TestAll(c *C) {
 
 	c.Logf("Running %d data tests", len(names))
 
-	for idx, _ := range setup {
+	for idx := range setup {
 		c.Logf("Initializing database for %s", names[idx])
 		client.CreateDatabase(fmt.Sprintf("db%d", idx), c)
 	}
@@ -119,6 +121,35 @@ func (self *DataTestSuite) InfiniteValues(c *C) (Fun, Fun) {
 			maps := ToMap(serieses[0])
 			c.Assert(maps, HasLen, 1)
 			c.Assert(maps[0]["derivative"], IsNil)
+		}
+}
+
+// test large integer values
+func (self *DataTestSuite) LargeIntegerValues(c *C) (Fun, Fun) {
+	// make sure we exceed the pointBatchSize, so we force a yield to
+	// the filtering engine
+	i := int64(math.MaxInt64)
+	return func(client Client) {
+			data := fmt.Sprintf(`
+[
+  {
+    "points": [
+        [%d]
+    ],
+    "name": "test_large_integer_values",
+    "columns": ["value"]
+  }
+]`, i)
+			client.WriteJsonData(data, c, influxdb.Second)
+		}, func(client Client) {
+			serieses := client.RunQueryWithNumbers("select * from test_large_integer_values", c, "m")
+			c.Assert(serieses, HasLen, 1)
+			maps := ToMap(serieses[0])
+			c.Assert(maps, HasLen, 1)
+			n := maps[0]["value"]
+			actual, err := n.(json.Number).Int64()
+			c.Assert(err, IsNil)
+			c.Assert(actual, Equals, i)
 		}
 }
 
@@ -175,10 +206,120 @@ func (self *DataTestSuite) DifferenceValues(c *C) (Fun, Fun) {
 		}
 }
 
+func (self *DataTestSuite) ModeWithInt(c *C) (Fun, Fun) {
+	return func(client Client) {
+			data := `
+[
+  {
+    "name": "test_mode",
+    "columns": ["value"],
+    "points": [
+      [1],
+      [2],
+      [2],
+      [3],
+      [4]
+    ]
+  }
+ ]`
+			client.WriteJsonData(data, c, influxdb.Millisecond)
+		}, func(client Client) {
+			serieses := client.RunQuery("select mode(value) from test_mode", c, "m")
+			c.Assert(serieses, HasLen, 1)
+			maps := ToMap(serieses[0])
+			c.Assert(maps, HasLen, 1)
+			c.Assert(maps[0]["mode"], Equals, 2.0)
+		}
+}
+
+func (self *DataTestSuite) ModeWithString(c *C) (Fun, Fun) {
+	return func(client Client) {
+			data := `
+[
+  {
+    "name": "test_mode_string",
+    "columns": ["value"],
+    "points": [
+      ["one"],
+      ["two"],
+      ["two"],
+      ["two"],
+      ["three"]
+    ]
+  }
+ ]`
+			client.WriteJsonData(data, c, influxdb.Millisecond)
+		}, func(client Client) {
+			serieses := client.RunQuery("select mode(value) from test_mode_string", c, "m")
+			c.Assert(serieses, HasLen, 1)
+			maps := ToMap(serieses[0])
+			c.Assert(maps, HasLen, 1)
+			c.Assert(maps[0]["mode"], Equals, "two")
+		}
+}
+
+func (self *DataTestSuite) ModeWithNils(c *C) (Fun, Fun) {
+	return func(client Client) {
+			data := `
+[
+  {
+    "name": "test_mode_nils",
+    "columns": ["value", "value2"],
+    "points": [
+      [1, "one"],
+      [1, null],
+      [1, null],
+      [1, null],
+      [1, "three"]
+    ]
+  }
+ ]`
+			client.WriteJsonData(data, c, influxdb.Millisecond)
+		}, func(client Client) {
+			serieses := client.RunQuery("select mode(value) as m1, mode(value2) as m2 from test_mode_nils", c, "m")
+			c.Assert(serieses, HasLen, 1)
+			maps := ToMap(serieses[0])
+			c.Assert(maps, HasLen, 1)
+			c.Assert(maps[0]["m2"], Equals, nil)
+		}
+}
+
+func (self *DataTestSuite) MergingOldData(c *C) (Fun, Fun) {
+	return func(client Client) {
+			data := `
+[
+  {
+    "name": "test_merge_1",
+    "columns": ["time", "value"],
+    "points": [
+      [315532800000, "a value"]
+    ]
+  },
+  {
+    "name": "test_merge_2",
+    "columns": ["time", "value"],
+    "points": [
+      [1401321600000, "another value"]
+    ]
+  }
+ ]`
+			client.WriteJsonData(data, c, influxdb.Millisecond)
+		}, func(client Client) {
+			serieses := client.RunQuery("select * from test_merge_1 merge test_merge_2", c, "m")
+			c.Assert(serieses, HasLen, 1)
+			maps := ToMap(serieses[0])
+			c.Assert(maps, HasLen, 2)
+
+			serieses = client.RunQuery("select * from test_merge_1 merge test_merge_2 where time > '1980-01-01' and time < '1980-01-04'", c, "m")
+			c.Assert(serieses, HasLen, 1)
+			maps = ToMap(serieses[0])
+			c.Assert(maps, HasLen, 1)
+			c.Assert(maps[0]["value"], Equals, "a value")
+		}
+}
+
 // Difference function combined with group by
 func (self *DataTestSuite) DifferenceGroupValues(c *C) (Fun, Fun) {
-	// make sure we exceed the pointBatchSize, so we force a yield to
-	// the filtering engine
 	return func(client Client) {
 			data := `
 [
@@ -204,6 +345,58 @@ func (self *DataTestSuite) DifferenceGroupValues(c *C) (Fun, Fun) {
 			c.Assert(maps[0]["difference"], Equals, 10.0)
 			c.Assert(maps[1]["difference"], Equals, 20.0)
 			c.Assert(maps[2]["difference"], Equals, 80.0)
+		}
+}
+
+// issue 578
+func (self *DataTestSuite) ParanthesesAlias(c *C) (Fun, Fun) {
+	return func(client Client) {
+			data := `
+[
+  {
+	"points": [
+	[  0.0, 1.0]
+	],
+	"name": "test_parantheses_aliasing",
+	"columns": ["value", "one"]
+  }
+]`
+			client.WriteJsonData(data, c, influxdb.Second)
+		}, func(client Client) {
+			serieses := client.RunQuery("select (value + one) as value_plus_one from test_parantheses_aliasing", c, "m")
+			c.Assert(serieses, HasLen, 1)
+			maps := ToMap(serieses[0])
+			c.Assert(maps, HasLen, 1)
+			c.Assert(maps[0]["value_plus_one"], Equals, 1.0)
+		}
+}
+
+func (self *DataTestSuite) WhereAndLimit(c *C) (Fun, Fun) {
+	// make sure we exceed the pointBatchSize, so we force a yield to
+	// the filtering engine
+	return func(client Client) {
+			data := `
+[
+  {
+	"points": [
+	[0.0  , "host"],
+	[10.0 , "host"],
+	[20.0 , "host"],
+	[40.0 , "host"],
+	[80.0 , "host"],
+	[160.0, "hosta"]
+	],
+	"name": "test_where_and_limit",
+	"columns": ["value", "host"]
+  }
+]`
+			client.WriteJsonData(data, c)
+		}, func(client Client) {
+			serieses := client.RunQuery("explain select * from /test_where_and_limit/ where host = 'hosta' limit 1", c, "m")
+			c.Assert(serieses, HasLen, 1)
+			maps := ToMap(serieses[0])
+			c.Assert(maps, HasLen, 1)
+			c.Assert(maps[0]["points_read"], Equals, 1.0)
 		}
 }
 
@@ -464,12 +657,12 @@ func (self *DataTestSuite) DifferentColumnsAcrossShards2(c *C) (Fun, Fun) {
 func (self *DataTestSuite) NullValuesInComparison(c *C) (Fun, Fun) {
 	return func(client Client) {
 			series := []*influxdb.Series{
-				&influxdb.Series{
+				{
 					Name:    "foo",
 					Columns: []string{"foo", "bar"},
 					Points: [][]interface{}{
-						[]interface{}{1, 2},
-						[]interface{}{2, nil},
+						{1, 2},
+						{2, nil},
 					},
 				},
 			}
@@ -592,13 +785,14 @@ func (self *DataTestSuite) ExplainsWithPassthroughAndLimit(c *C) (Fun, Fun) {
 			c.Assert(series, HasLen, 1)
 			c.Assert(series[0].Name, Equals, "explain query")
 			c.Assert(series[0].Columns, HasLen, 7) // 6 columns plus the time column
-			c.Assert(series[0].Points, HasLen, 1)
-			c.Assert(series[0].Points[0][1], Equals, "QueryEngine")
+			maps := ToMap(series[0])
+			c.Assert(maps, HasLen, 1)
+			c.Assert(maps[0]["engine_name"], Equals, "QueryEngine")
 
 			// we can read at most point-batch-size points, which is set to 100
 			// by default
-			c.Assert(series[0].Points[0][5], Equals, float64(100.0))
-			c.Assert(series[0].Points[0][6], Equals, float64(1.0))
+			c.Assert(maps[0]["points_read"], Equals, 1.0)
+			c.Assert(maps[0]["points_written"], Equals, 1.0)
 		}
 }
 
@@ -799,7 +993,7 @@ func (self *DataTestSuite) AscendingQueries(c *C) (Fun, Fun) {
 				Name:    "test_ascending",
 				Columns: []string{"host", "time"},
 				Points: [][]interface{}{
-					[]interface{}{"hosta", now.Add(-4 * time.Second).Unix()},
+					{"hosta", now.Add(-4 * time.Second).Unix()},
 				},
 			}
 			client.WriteData([]*influxdb.Series{series}, c, "s")
@@ -807,8 +1001,8 @@ func (self *DataTestSuite) AscendingQueries(c *C) (Fun, Fun) {
 				Name:    "test_ascending",
 				Columns: []string{"host", "time", "cpu"},
 				Points: [][]interface{}{
-					[]interface{}{"hosta", now.Add(-time.Second).Unix(), 60},
-					[]interface{}{"hostb", now.Add(-time.Second).Unix(), 70},
+					{"hosta", now.Add(-time.Second).Unix(), 60},
+					{"hostb", now.Add(-time.Second).Unix(), 70},
 				},
 			}
 			client.WriteData([]*influxdb.Series{series}, c, "s")
@@ -846,10 +1040,10 @@ func (self *DataTestSuite) FilterWithLimit(c *C) (Fun, Fun) {
 				Name:    "test_ascending",
 				Columns: []string{"host", "time", "cpu"},
 				Points: [][]interface{}{
-					[]interface{}{"hosta", now.Add(-time.Second).Unix(), 60},
-					[]interface{}{"hostb", now.Add(-time.Second).Unix(), 70},
-					[]interface{}{"hosta", now.Add(-2 * time.Second).Unix(), 70},
-					[]interface{}{"hostb", now.Add(-2 * time.Second).Unix(), 80},
+					{"hosta", now.Add(-time.Second).Unix(), 60},
+					{"hostb", now.Add(-time.Second).Unix(), 70},
+					{"hosta", now.Add(-2 * time.Second).Unix(), 70},
+					{"hostb", now.Add(-2 * time.Second).Unix(), 80},
 				},
 			}
 			client.WriteData([]*influxdb.Series{series}, c)
@@ -869,8 +1063,8 @@ func (self *DataTestSuite) FilterWithInClause(c *C) (Fun, Fun) {
 				Name:    "test_in_clause",
 				Columns: []string{"host", "cpu"},
 				Points: [][]interface{}{
-					[]interface{}{"hosta", 60},
-					[]interface{}{"hostb", 70},
+					{"hosta", 60},
+					{"hostb", 70},
 				},
 			}
 			client.WriteData([]*influxdb.Series{series}, c)
@@ -1305,8 +1499,8 @@ func (self *DataTestSuite) ReadingWhenColumnHasDot(c *C) (Fun, Fun) {
 ]`, c)
 		}, func(client Client) {
 			for name, expected := range map[string]map[string]bool{
-				"first.name": map[string]bool{"paul": true, "john": true},
-				"last.name":  map[string]bool{"dix": true, "shahid": true},
+				"first.name": {"paul": true, "john": true},
+				"last.name":  {"dix": true, "shahid": true},
 			} {
 				q := fmt.Sprintf("select %s from test_column_names_with_dots", name)
 
@@ -1437,10 +1631,10 @@ func (self *DataTestSuite) SeriesListing(c *C) (Fun, Fun) {
 
 func (self *DataTestSuite) ArithmeticOperations(c *C) (Fun, Fun) {
 	queries := map[string][9]float64{
-		"select input + output from test_arithmetic_3.0;":       [9]float64{1, 2, 3, 4, 5, 9, 6, 7, 13},
-		"select input - output from test_arithmetic_-1.0;":      [9]float64{1, 2, -1, 4, 5, -1, 6, 7, -1},
-		"select input * output from test_arithmetic_2.0;":       [9]float64{1, 2, 2, 4, 5, 20, 6, 7, 42},
-		"select 1.0 * input / output from test_arithmetic_0.5;": [9]float64{1, 2, 0.5, 4, 5, 0.8, 6, 8, 0.75},
+		"select input + output from test_arithmetic_3.0;":       {1, 2, 3, 4, 5, 9, 6, 7, 13},
+		"select input - output from test_arithmetic_-1.0;":      {1, 2, -1, 4, 5, -1, 6, 7, -1},
+		"select input * output from test_arithmetic_2.0;":       {1, 2, 2, 4, 5, 20, 6, 7, 42},
+		"select 1.0 * input / output from test_arithmetic_0.5;": {1, 2, 0.5, 4, 5, 0.8, 6, 8, 0.75},
 	}
 
 	return func(client Client) {
@@ -1708,7 +1902,7 @@ func (self *DataTestSuite) ColumnNamesReturnInDistributedQuery(c *C) (Fun, Fun) 
 			c.Assert(collection, HasLen, 1)
 			maps := ToMap(collection[0])
 			set := map[float64]bool{}
-			for idx, _ := range maps {
+			for idx := range maps {
 				set[maps[idx]["col1"].(float64)] = true
 			}
 			c.Assert(set, DeepEquals, map[float64]bool{1: true, 2: true})
@@ -1922,7 +2116,7 @@ func (self *DataTestSuite) TopWithGroupBy(c *C) (Fun, Fun) {
 			for _, point := range data[0].Points {
 				tops = append(tops, tmp{point[1].(float64), point[2].(string)})
 			}
-			c.Assert(tops, DeepEquals, []tmp{tmp{80, "hosta"}, tmp{70, "hosta"}, tmp{90, "hostb"}, tmp{80, "hostb"}})
+			c.Assert(tops, DeepEquals, []tmp{{80, "hosta"}, {70, "hosta"}, {90, "hostb"}, {80, "hostb"}})
 		}
 }
 
@@ -1953,7 +2147,7 @@ func (self *DataTestSuite) TopWithMultipleGroupBy(c *C) (Fun, Fun) {
 			for _, point := range data[0].Points {
 				tops = append(tops, tmp{point[1].(float64), point[2].(string)})
 			}
-			c.Assert(tops, DeepEquals, []tmp{tmp{80, "hosta"}, tmp{70, "hosta"}, tmp{90, "hostb"}, tmp{80, "hostb"}})
+			c.Assert(tops, DeepEquals, []tmp{{80, "hosta"}, {70, "hosta"}, {90, "hostb"}, {80, "hostb"}})
 		}
 }
 
@@ -2065,7 +2259,7 @@ func (self *DataTestSuite) BottomWithGroupBy(c *C) (Fun, Fun) {
 			for _, point := range data[0].Points {
 				tops = append(tops, tmp{point[1].(float64), point[2].(string)})
 			}
-			c.Assert(tops, DeepEquals, []tmp{tmp{60, "hosta"}, tmp{70, "hosta"}, tmp{70, "hostb"}, tmp{80, "hostb"}})
+			c.Assert(tops, DeepEquals, []tmp{{60, "hosta"}, {70, "hosta"}, {70, "hostb"}, {80, "hostb"}})
 		}
 }
 
@@ -2124,7 +2318,7 @@ func (self *DataTestSuite) BottomWithMultipleGroupBy(c *C) (Fun, Fun) {
 			for _, point := range data[0].Points {
 				tops = append(tops, tmp{point[1].(float64), point[2].(string)})
 			}
-			c.Assert(tops, DeepEquals, []tmp{tmp{60, "hosta"}, tmp{70, "hosta"}, tmp{70, "hostb"}, tmp{80, "hostb"}})
+			c.Assert(tops, DeepEquals, []tmp{{60, "hosta"}, {70, "hosta"}, {70, "hostb"}, {80, "hostb"}})
 		}
 }
 

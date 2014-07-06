@@ -69,7 +69,7 @@ func (self *QuerySpec) TableNames() []string {
 	namesAndColumns := self.query.SelectQuery.GetReferencedColumns()
 
 	names := make([]string, 0, len(namesAndColumns))
-	for name, _ := range namesAndColumns {
+	for name := range namesAndColumns {
 		if _, isRegex := name.GetCompiledRegex(); isRegex {
 			self.isRegex = true
 		} else {
@@ -96,6 +96,13 @@ func (self *QuerySpec) SeriesValuesAndColumns() map[*Value][]string {
 		self.seriesValuesAndColumns[value] = nil
 	}
 	return self.seriesValuesAndColumns
+}
+
+func (self *QuerySpec) GetFromClause() *FromClause {
+	if q := self.query.SelectQuery; q != nil {
+		return q.GetFromClause()
+	}
+	return nil
 }
 
 func (self *QuerySpec) GetGroupByInterval() *time.Duration {
@@ -146,7 +153,7 @@ func (self *QuerySpec) SelectQuery() *SelectQuery {
 }
 
 func (self *QuerySpec) ShouldQueryShortTermAndLongTerm() (shouldQueryShortTerm bool, shouldQueryLongTerm bool) {
-	for val, _ := range self.SeriesValuesAndColumns() {
+	for val := range self.SeriesValuesAndColumns() {
 		_, isRegex := val.GetCompiledRegex()
 		if isRegex {
 			return true, true

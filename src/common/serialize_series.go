@@ -1,6 +1,7 @@
 package common
 
 import (
+	"encoding/json"
 	"fmt"
 	"protocol"
 
@@ -50,8 +51,23 @@ type ApiSeries interface {
 	GetPoints() [][]interface{}
 }
 
+func hasDuplicates(ss []string) bool {
+	m := make(map[string]struct{}, len(ss))
+	for _, s := range ss {
+		if _, ok := m[s]; ok {
+			return true
+		}
+		m[s] = struct{}{}
+	}
+	return false
+}
+
 func ConvertToDataStoreSeries(s ApiSeries, precision TimePrecision) (*protocol.Series, error) {
 	points := make([]*protocol.Point, 0, len(s.GetPoints()))
+	if hasDuplicates(s.GetColumns()) {
+		return nil, fmt.Errorf("Cannot have duplicate field names")
+	}
+
 	for _, point := range s.GetPoints() {
 		if len(point) != len(s.GetColumns()) {
 			return nil, fmt.Errorf("invalid payload")
@@ -65,9 +81,13 @@ func ConvertToDataStoreSeries(s ApiSeries, precision TimePrecision) (*protocol.S
 
 			value := point[idx]
 			if field == "time" {
-				switch value.(type) {
-				case float64:
-					_timestamp := int64(value.(float64))
+				switch x := value.(type) {
+				case json.Number:
+					f, err := x.Float64()
+					if err != nil {
+						return nil, err
+					}
+					_timestamp := int64(f)
 					switch precision {
 					case SecondPrecision:
 						_timestamp *= 1000
@@ -84,9 +104,13 @@ func ConvertToDataStoreSeries(s ApiSeries, precision TimePrecision) (*protocol.S
 			}
 
 			if field == "sequence_number" {
-				switch value.(type) {
-				case float64:
-					_sequenceNumber := uint64(value.(float64))
+				switch x := value.(type) {
+				case json.Number:
+					f, err := x.Float64()
+					if err != nil {
+						return nil, err
+					}
+					_sequenceNumber := uint64(f)
 					sequence = &_sequenceNumber
 					continue
 				default:
@@ -97,12 +121,17 @@ func ConvertToDataStoreSeries(s ApiSeries, precision TimePrecision) (*protocol.S
 			switch v := value.(type) {
 			case string:
 				values = append(values, &protocol.FieldValue{StringValue: &v})
-			case float64:
-				if i := int64(v); float64(i) == v {
+			case json.Number:
+				i, err := v.Int64()
+				if err == nil {
 					values = append(values, &protocol.FieldValue{Int64Value: &i})
-				} else {
-					values = append(values, &protocol.FieldValue{DoubleValue: &v})
+					break
 				}
+				f, err := v.Float64()
+				if err != nil {
+					return nil, err
+				}
+				values = append(values, &protocol.FieldValue{DoubleValue: &f})
 			case bool:
 				values = append(values, &protocol.FieldValue{BoolValue: &v})
 			case nil:

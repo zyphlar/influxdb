@@ -2,8 +2,8 @@ package cluster
 
 import (
 	"common"
-	"testing"
 	. "launchpad.net/gocheck"
+	"testing"
 )
 
 type UserSuite struct{}
@@ -26,6 +26,7 @@ func (self *UserSuite) SetUpSuite(c *C) {
 func (self *UserSuite) TestProperties(c *C) {
 	u := ClusterAdmin{CommonUser{Name: "root"}}
 	c.Assert(u.IsClusterAdmin(), Equals, true)
+	c.Assert(u.IsDbAdmin("db"), Equals, true)
 	c.Assert(u.GetName(), Equals, "root")
 	hash, err := HashPassword("foobar")
 	c.Assert(err, IsNil)

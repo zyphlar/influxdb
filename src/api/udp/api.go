@@ -1,9 +1,9 @@
 package udp
 
 import (
+	"bytes"
 	"cluster"
 	. "common"
-	"configuration"
 	"coordinator"
 	"encoding/json"
 	"net"
@@ -22,11 +22,11 @@ type Server struct {
 	shutdown      chan bool
 }
 
-func NewServer(config *configuration.Configuration, coord coordinator.Coordinator, clusterConfig *cluster.ClusterConfiguration) *Server {
+func NewServer(listenAddress string, database string, coord coordinator.Coordinator, clusterConfig *cluster.ClusterConfiguration) *Server {
 	self := &Server{}
 
-	self.listenAddress = config.UdpInputPortString()
-	self.database = config.UdpInputDatabase
+	self.listenAddress = listenAddress
+	self.database = database
 	self.coordinator = coord
 	self.shutdown = make(chan bool, 1)
 	self.clusterConfig = clusterConfig
@@ -73,7 +73,9 @@ func (self *Server) HandleSocket(socket *net.UDPConn) {
 		}
 
 		serializedSeries := []*SerializedSeries{}
-		err = json.Unmarshal(buffer[0:n], &serializedSeries)
+		decoder := json.NewDecoder(bytes.NewBuffer(buffer[0:n]))
+		decoder.UseNumber()
+		err = decoder.Decode(&serializedSeries)
 		if err != nil {
 			log.Error("UDP json error: %s", err)
 			continue

@@ -1,8 +1,10 @@
 package configuration
 
 import (
+	"reflect"
 	"testing"
 	"time"
+
 	. "launchpad.net/gocheck"
 )
 
@@ -25,11 +27,6 @@ func (self *LoadConfigurationSuite) TestConfig(c *C) {
 	c.Assert(config.AdminAssetsDir, Equals, "./admin")
 	c.Assert(config.AdminHttpPort, Equals, 8083)
 
-	// the default should be 100, this shouldn't be set in the test toml
-	// file
-	c.Assert(config.LevelDbMaxOpenFiles, Equals, 100)
-	c.Assert(config.LevelDbPointBatchSize, Equals, 50)
-
 	c.Assert(config.ApiHttpPort, Equals, 0)
 	c.Assert(config.ApiHttpSslPort, Equals, 8087)
 	c.Assert(config.ApiHttpCertPath, Equals, "../cert.pem")
@@ -39,9 +36,10 @@ func (self *LoadConfigurationSuite) TestConfig(c *C) {
 	c.Assert(config.GraphitePort, Equals, 2003)
 	c.Assert(config.GraphiteDatabase, Equals, "")
 
-	c.Assert(config.UdpInputEnabled, Equals, true)
-	c.Assert(config.UdpInputPort, Equals, 4444)
-	c.Assert(config.UdpInputDatabase, Equals, "test")
+	c.Assert(config.UdpServers, HasLen, 1)
+	c.Assert(config.UdpServers[0].Enabled, Equals, true)
+	c.Assert(config.UdpServers[0].Port, Equals, 4444)
+	c.Assert(config.UdpServers[0].Database, Equals, "test")
 
 	c.Assert(config.RaftDir, Equals, "/tmp/influxdb/development/raft")
 	c.Assert(config.RaftServerPort, Equals, 8090)
@@ -66,9 +64,11 @@ func (self *LoadConfigurationSuite) TestConfig(c *C) {
 }
 
 func (self *LoadConfigurationSuite) TestSizeParsing(c *C) {
-	var s size
+	var s Size
 	c.Assert(s.UnmarshalText([]byte("200m")), IsNil)
-	c.Assert(s.int64, Equals, 200*ONE_MEGABYTE)
-	c.Assert(s.UnmarshalText([]byte("10g")), IsNil)
-	c.Assert(s.int64, Equals, 10*ONE_GIGABYTE)
+	c.Assert(int64(s), Equals, 200*ONE_MEGABYTE)
+	if t := reflect.TypeOf(0); t.Size() > 4 {
+		c.Assert(s.UnmarshalText([]byte("10g")), IsNil)
+		c.Assert(int64(s), Equals, 10*ONE_GIGABYTE)
+	}
 }

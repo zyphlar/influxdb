@@ -10,11 +10,12 @@ import (
 	"coordinator"
 	"datastore"
 	"metastore"
+	"runtime"
+	"time"
 	"wal"
 
-	"time"
-
 	log "code.google.com/p/log4go"
+	influxdb "github.com/influxdb/influxdb-go"
 )
 
 type Server struct {
@@ -24,19 +25,20 @@ type Server struct {
 	HttpApi        *http.HttpServer
 	GraphiteApi    *graphite.Server
 	UdpApi         *udp.Server
+	UdpServers     []*udp.Server
 	AdminServer    *admin.HttpServer
 	Coordinator    coordinator.Coordinator
 	Config         *configuration.Configuration
 	RequestHandler *coordinator.ProtobufRequestHandler
 	stopped        bool
 	writeLog       *wal.WAL
-	shardStore     *datastore.LevelDbShardDatastore
+	shardStore     *datastore.ShardDatastore
 }
 
 func NewServer(config *configuration.Configuration) (*Server, error) {
 	log.Info("Opening database at %s", config.DataDir)
 	metaStore := metastore.NewStore()
-	shardDb, err := datastore.NewLevelDbShardDatastore(config, metaStore)
+	shardDb, err := datastore.NewShardDatastore(config, metaStore)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +66,6 @@ func NewServer(config *configuration.Configuration) (*Server, error) {
 	httpApi := http.NewHttpServer(config.ApiHttpPortString(), config.ApiReadTimeout, config.AdminAssetsDir, coord, coord, clusterConfig, raftServer)
 	httpApi.EnableSsl(config.ApiHttpSslPortString(), config.ApiHttpCertPath)
 	graphiteApi := graphite.NewServer(config, coord, clusterConfig)
-	udpApi := udp.NewServer(config, coord, clusterConfig)
 	adminServer := admin.NewHttpServer(config.AdminAssetsDir, config.AdminHttpPortString())
 
 	return &Server{
@@ -73,7 +74,6 @@ func NewServer(config *configuration.Configuration) (*Server, error) {
 		ClusterConfig:  clusterConfig,
 		HttpApi:        httpApi,
 		GraphiteApi:    graphiteApi,
-		UdpApi:         udpApi,
 		Coordinator:    coord,
 		AdminServer:    adminServer,
 		Config:         config,
@@ -142,13 +142,30 @@ func (self *Server) ListenAndServe() error {
 		}
 	}
 
-	if self.Config.UdpInputEnabled {
-		if self.Config.UdpInputPort <= 0 || self.Config.UdpInputDatabase == "" {
-			log.Warn("Cannot start udp server. please check your configuration")
-		} else {
-			log.Info("Starting UDP Listener on port %d", self.Config.UdpInputPort)
-			go self.UdpApi.ListenAndServe()
+	// UDP input
+	for _, udpInput := range self.Config.UdpServers {
+		port := udpInput.Port
+		database := udpInput.Database
+
+		if port <= 0 {
+			log.Warn("Cannot start udp server on port %d. please check your configuration", port)
+			continue
+		} else if database == "" {
+			log.Warn("Cannot start udp server for database=\"\".  please check your configuration")
 		}
+
+		log.Info("Starting UDP Listener on port %d to database %s", port, database)
+
+		addr := self.Config.UdpInputPortString(port)
+
+		server := udp.NewServer(addr, database, self.Coordinator, self.ClusterConfig)
+		self.UdpServers = append(self.UdpServers, server)
+		go server.ListenAndServe()
+	}
+
+	log.Debug("ReportingDisabled: %s", self.Config.ReportingDisabled)
+	if !self.Config.ReportingDisabled {
+		go self.startReportingLoop()
 	}
 
 	// start processing continuous queries
@@ -158,6 +175,43 @@ func (self *Server) ListenAndServe() error {
 	self.HttpApi.ListenAndServe()
 
 	return nil
+}
+
+func (self *Server) startReportingLoop() chan struct{} {
+	log.Debug("Starting Reporting Loop")
+	self.reportStats()
+
+	ticker := time.NewTicker(24 * time.Hour)
+	for {
+		select {
+		case <-ticker.C:
+			self.reportStats()
+		}
+	}
+}
+
+func (self *Server) reportStats() {
+	client, err := influxdb.NewClient(&influxdb.ClientConfig{
+		Database: "reporting",
+		Host:     "m.influxdb.com:8086",
+		Username: "reporter",
+		Password: "influxdb",
+	})
+
+	if err != nil {
+		log.Error("Couldn't create client for reporting: %s", err)
+	} else {
+		series := &influxdb.Series{
+			Name:    "reports",
+			Columns: []string{"os", "arch", "id", "version"},
+			Points: [][]interface{}{
+				{runtime.GOOS, runtime.GOARCH, self.RaftServer.GetRaftName(), self.Config.InfluxDBVersion},
+			},
+		}
+
+		log.Info("Reporting stats: %#v", series)
+		client.WriteSeries([]*influxdb.Series{series})
+	}
 }
 
 func (self *Server) Stop() {

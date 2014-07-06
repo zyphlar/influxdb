@@ -20,7 +20,7 @@ type WAL struct {
 	logFiles          []*log
 	logIndex          []*index
 	serverId          uint32
-	nextLogFileSuffix int
+	nextLogFileSuffix uint32
 	entries           chan interface{}
 
 	// counters to force index creation, bookmark and flushing
@@ -133,8 +133,8 @@ func (self *WAL) RecoverServerFromLastCommit(serverId uint32, shardIds []uint32,
 }
 
 func (self *WAL) isInRange(requestNumber uint32) bool {
-	rn := int(requestNumber)
-	largestRequestNumber := int(self.state.LargestRequestNumber)
+	rn := requestNumber
+	largestRequestNumber := self.state.LargestRequestNumber
 	if self.state.FirstSuffix > largestRequestNumber {
 		return rn <= largestRequestNumber || rn >= self.state.FirstSuffix
 	}
@@ -191,6 +191,7 @@ outer:
 		logger.Info("Replaying from %s:%d", logFile.file.Name(), firstOffset)
 		count := 0
 		ch, stopChan := logFile.dupAndReplayFromOffset(shardIds, firstOffset, requestNumber)
+		defer close(stopChan)
 		for {
 			x := <-ch
 			if x == nil {
@@ -210,7 +211,6 @@ outer:
 			}
 			count++
 		}
-		close(stopChan)
 	}
 	return nil
 }
@@ -298,7 +298,7 @@ func (self *WAL) processAppendEntry(e *appendEntry) {
 			e.confirmation <- &confirmation{0, err}
 			return
 		}
-		self.state.FirstSuffix = int(nextRequestNumber)
+		self.state.FirstSuffix = nextRequestNumber
 	}
 
 	lastLogFile := self.logFiles[len(self.logFiles)-1]

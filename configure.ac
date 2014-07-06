@@ -1,7 +1,9 @@
 AC_INIT([Influxdb], [0.3.0], [support@influxdb.com], [influxdb], [http://influxdb.org/])
 AC_SUBST(PROTOC)
 AC_SUBST(GO)
+AC_SUBST(GOFMT)
 AC_SUBST(GOROOT)
+AC_SUBST(AUTORECONF)
 AC_SUBST(with_bison)
 AC_SUBST(with_flex)
 AC_PATH_PROG(PROTOC, protoc, "notfound")
@@ -15,6 +17,10 @@ AC_ARG_WITH([goroot],
   [])
 AC_PATH_PROG(GO, go, "notfound")
 if test x"${GO}" == x"notfound"; then
+    AC_MSG_ERROR([Please install GO (or make sure it's on your path) before trying to build Influxdb])
+fi
+AC_PATH_PROG(GOFMT, gofmt, "notfound")
+if test x"${GOFMT}" == x"notfound"; then
     AC_MSG_ERROR([Please install GO (or make sure it's on your path) before trying to build Influxdb])
 fi
 AC_ARG_WITH([flex],
@@ -34,6 +40,13 @@ AC_ARG_WITH([bison],
     [Use bison given at that path])],
   [],
   [with_bison=])
+
+AC_PATH_PROG(AUTORECONF, autoreconf, "notfound")
+if test x"${AUTORECONF}" == x"notfound"; then
+   AC_MSG_ERROR([Please install autoconf before trying to build InfluxDB])
+fi
+AC_CHECK_LIB(z, gzdopen,,AC_MSG_ERROR("cannot find libz"))
+AC_CHECK_LIB(bz2, BZ2_bzReadOpen,,AC_MSG_ERROR("cannot find libbz2"))
 
 if test x"${with_bison}" == x""; then
    AC_PATH_PROG(with_bison, bison, "notfound")

@@ -51,7 +51,7 @@ func init() {
 
 // used in testing to get a list of all aggregators
 func GetRegisteredAggregators() (names []string) {
-	for n, _ := range registeredAggregators {
+	for n := range registeredAggregators {
 		names = append(names, n)
 	}
 	return
@@ -119,15 +119,15 @@ func (self *CumulativeArithmeticAggregator) ColumnNames() []string {
 func (self *CumulativeArithmeticAggregator) GetValues(state interface{}) [][]*protocol.FieldValue {
 	if state == nil {
 		return [][]*protocol.FieldValue{
-			[]*protocol.FieldValue{
-				&protocol.FieldValue{DoubleValue: &self.initialValue},
+			{
+				{DoubleValue: &self.initialValue},
 			},
 		}
 	}
 
 	return [][]*protocol.FieldValue{
-		[]*protocol.FieldValue{
-			&protocol.FieldValue{
+		{
+			{
 				DoubleValue: protocol.Float64(state.(float64)),
 			},
 		},
@@ -322,8 +322,8 @@ func (self *StandardDeviationAggregator) GetValues(state interface{}) [][]*proto
 	standardDeviation := math.Sqrt(eX2 - eX)
 
 	return [][]*protocol.FieldValue{
-		[]*protocol.FieldValue{
-			&protocol.FieldValue{DoubleValue: &standardDeviation},
+		{
+			{DoubleValue: &standardDeviation},
 		},
 	}
 }
@@ -383,7 +383,7 @@ func (self *DerivativeAggregator) AggregatePoint(state interface{}, p *protocol.
 
 	newValue := &protocol.Point{
 		Timestamp: p.Timestamp,
-		Values:    []*protocol.FieldValue{&protocol.FieldValue{DoubleValue: &value}},
+		Values:    []*protocol.FieldValue{{DoubleValue: &value}},
 	}
 
 	s, ok := state.(*DerivativeAggregatorState)
@@ -419,11 +419,10 @@ func (self *DerivativeAggregator) GetValues(state interface{}) [][]*protocol.Fie
 	deltaV := *s.lastValue.Values[0].DoubleValue - *s.firstValue.Values[0].DoubleValue
 	derivative := deltaV / deltaT
 	return [][]*protocol.FieldValue{
-		[]*protocol.FieldValue{
-			&protocol.FieldValue{DoubleValue: &derivative},
+		{
+			{DoubleValue: &derivative},
 		},
 	}
-	return [][]*protocol.FieldValue{}
 }
 
 func NewDerivativeAggregator(q *parser.SelectQuery, v *parser.Value, defaultValue *parser.Value) (Aggregator, error) {
@@ -482,7 +481,7 @@ func (self *DifferenceAggregator) AggregatePoint(state interface{}, p *protocol.
 
 	newValue := &protocol.Point{
 		Timestamp: p.Timestamp,
-		Values:    []*protocol.FieldValue{&protocol.FieldValue{DoubleValue: &value}},
+		Values:    []*protocol.FieldValue{{DoubleValue: &value}},
 	}
 
 	s, ok := state.(*DifferenceAggregatorState)
@@ -515,11 +514,10 @@ func (self *DifferenceAggregator) GetValues(state interface{}) [][]*protocol.Fie
 
 	difference := *s.lastValue.Values[0].DoubleValue - *s.firstValue.Values[0].DoubleValue
 	return [][]*protocol.FieldValue{
-		[]*protocol.FieldValue{
-			&protocol.FieldValue{DoubleValue: &difference},
+		{
+			{DoubleValue: &difference},
 		},
 	}
-	return [][]*protocol.FieldValue{}
 }
 
 func NewDifferenceAggregator(q *parser.SelectQuery, v *parser.Value, defaultValue *parser.Value) (Aggregator, error) {
@@ -593,8 +591,8 @@ func (self *HistogramAggregator) GetValues(state interface{}) [][]*protocol.Fiel
 		_size := int64(size)
 
 		returnValues = append(returnValues, []*protocol.FieldValue{
-			&protocol.FieldValue{DoubleValue: &_bucket},
-			&protocol.FieldValue{Int64Value: &_size},
+			{DoubleValue: &_bucket},
+			{Int64Value: &_size},
 		})
 	}
 
@@ -677,7 +675,7 @@ func (self *CountAggregator) GetValues(state interface{}) [][]*protocol.FieldVal
 	} else {
 		value := state.(int64)
 		returnValues = append(returnValues, []*protocol.FieldValue{
-			&protocol.FieldValue{Int64Value: &value},
+			{Int64Value: &value},
 		})
 	}
 
@@ -769,7 +767,7 @@ func (self *MeanAggregator) GetValues(state interface{}) [][]*protocol.FieldValu
 		returnValues = append(returnValues, []*protocol.FieldValue{self.defaultValue})
 	} else {
 		returnValues = append(returnValues, []*protocol.FieldValue{
-			&protocol.FieldValue{DoubleValue: &s.mean},
+			{DoubleValue: &s.mean},
 		})
 	}
 
@@ -875,11 +873,11 @@ func (self *PercentileAggregator) GetValues(state interface{}) [][]*protocol.Fie
 	s, ok := state.(*PercentileAggregatorState)
 	if !ok {
 		return [][]*protocol.FieldValue{
-			[]*protocol.FieldValue{self.defaultValue},
+			{self.defaultValue},
 		}
 	}
 	return [][]*protocol.FieldValue{
-		[]*protocol.FieldValue{&protocol.FieldValue{DoubleValue: &s.percentileValue}},
+		{{DoubleValue: &s.percentileValue}},
 	}
 }
 
@@ -937,20 +935,20 @@ func NewPercentileAggregator(_ *parser.SelectQuery, value *parser.Value, default
 //
 
 type ModeAggregatorState struct {
-	counts map[float64]int
-	modes  []float64
+	counts map[interface{}]int
 }
 
 type ModeAggregator struct {
 	AbstractAggregator
 	defaultValue *protocol.FieldValue
 	alias        string
+	size         int
 }
 
 func (self *ModeAggregator) AggregatePoint(state interface{}, p *protocol.Point) (interface{}, error) {
 	s, ok := state.(*ModeAggregatorState)
 	if !ok {
-		s = &ModeAggregatorState{make(map[float64]int), nil}
+		s = &ModeAggregatorState{make(map[interface{}]int)}
 	}
 
 	point, err := GetValue(self.value, self.columns, p)
@@ -958,13 +956,17 @@ func (self *ModeAggregator) AggregatePoint(state interface{}, p *protocol.Point)
 		return nil, err
 	}
 
-	var value float64
+	var value interface{}
 	if point.Int64Value != nil {
 		value = float64(*point.Int64Value)
 	} else if point.DoubleValue != nil {
 		value = *point.DoubleValue
+	} else if point.BoolValue != nil {
+		value = *point.BoolValue
+	} else if point.StringValue != nil {
+		value = *point.StringValue
 	} else {
-		return s, nil
+		value = nil
 	}
 
 	s.counts[value]++
@@ -978,49 +980,81 @@ func (self *ModeAggregator) ColumnNames() []string {
 	return []string{"mode"}
 }
 
-func (self *ModeAggregator) CalculateSummaries(state interface{}) {
-	modes := []float64{}
-	currentCount := 1
-
+func (self *ModeAggregator) GetValues(state interface{}) [][]*protocol.FieldValue {
 	s := state.(*ModeAggregatorState)
+
+	counts := make([]int, len(s.counts))
+	countMap := make(map[int][]interface{}, len(s.counts))
 	for value, count := range s.counts {
-		if count == currentCount {
-			modes = append(modes, value)
-		} else if count > currentCount {
-			modes = nil
-			modes = append(modes, value)
-			currentCount = count
-		}
+		counts = append(counts, count)
+		countMap[count] = append(countMap[count], value)
 	}
 
-	s.modes = modes
-	s.counts = nil
-}
+	// descending sort
+	sort.Sort(sort.Reverse(sort.IntSlice(counts)))
 
-func (self *ModeAggregator) GetValues(state interface{}) [][]*protocol.FieldValue {
 	returnValues := [][]*protocol.FieldValue{}
 
-	s, ok := state.(*ModeAggregatorState)
-	if !ok || len(s.modes) == 0 {
-		returnValues = append(returnValues, []*protocol.FieldValue{self.defaultValue})
-		return returnValues
-	}
-
-	for _, value := range s.modes {
-		// we can't use value since we need a pointer to a variable that won't change,
-		// while value will change the next iteration
-		v := value
-		returnValues = append(returnValues, []*protocol.FieldValue{
-			&protocol.FieldValue{DoubleValue: &v},
-		})
+	last := 0
+	for _, count := range counts {
+		// counts can contain duplicates, but we only want to append each count-set once
+		if count == last {
+			continue
+		}
+		last = count
+		for _, value := range countMap[count] {
+			switch v := value.(type) {
+			case int:
+				n := int64(v)
+				returnValues = append(returnValues, []*protocol.FieldValue{{Int64Value: &n}})
+			case string:
+				returnValues = append(returnValues, []*protocol.FieldValue{{StringValue: &v}})
+			case bool:
+				returnValues = append(returnValues, []*protocol.FieldValue{{BoolValue: &v}})
+			case float64:
+				returnValues = append(returnValues, []*protocol.FieldValue{{DoubleValue: &v}})
+			case nil:
+				returnValues = append(returnValues, []*protocol.FieldValue{{IsNull: &TRUE}})
+			}
+		}
+		// size is really "minimum size"
+		if len(returnValues) >= self.size {
+			break
+		}
 	}
 
 	return returnValues
 }
 
 func NewModeAggregator(_ *parser.SelectQuery, value *parser.Value, defaultValue *parser.Value) (Aggregator, error) {
-	if len(value.Elems) != 1 {
-		return nil, common.NewQueryError(common.WrongNumberOfArguments, "function mode() requires exactly one argument")
+	if len(value.Elems) < 1 {
+		return nil, common.NewQueryError(common.WrongNumberOfArguments, "function mode() requires at least one argument")
+	}
+
+	// TODO: Mode can in fact take two argument, the second specifies
+	// the "size", but it's not clear if size is set to 2 whether to
+	// return at least 2 elements, or return the most common values and
+	// the second most common values. The difference will be apparent if
+	// the data set is multimodel and there are two most common
+	// values. In the first case, the two most common values will be
+	// returned, but in the second case the two most common values and
+	// the second most common values will be returned
+	if len(value.Elems) > 1 {
+		return nil, common.NewQueryError(common.WrongNumberOfArguments, "function mode() takes at most one arguments")
+	}
+
+	size := 1
+	if len(value.Elems) == 2 {
+		switch value.Elems[1].Type {
+		case parser.ValueInt:
+			var err error
+			size, err = strconv.Atoi(value.Elems[1].Name)
+			if err != nil {
+				return nil, common.NewQueryError(common.InvalidArgument, "Cannot parse %s into an int", value.Elems[1].Name)
+			}
+		default:
+			return nil, common.NewQueryError(common.InvalidArgument, "Cannot parse %s into a int", value.Elems[1].Name)
+		}
 	}
 
 	wrappedDefaultValue, err := wrapDefaultValue(defaultValue)
@@ -1034,6 +1068,7 @@ func NewModeAggregator(_ *parser.SelectQuery, value *parser.Value, defaultValue 
 		},
 		defaultValue: wrappedDefaultValue,
 		alias:        value.Alias,
+		size:         size,
 	}, nil
 }
 
@@ -1094,17 +1129,17 @@ func (self *DistinctAggregator) GetValues(state interface{}) [][]*protocol.Field
 		returnValues = append(returnValues, []*protocol.FieldValue{self.defaultValue})
 	}
 
-	for value, _ := range s.counts {
+	for value := range s.counts {
 		switch v := value.(type) {
 		case int:
 			i := int64(v)
-			returnValues = append(returnValues, []*protocol.FieldValue{&protocol.FieldValue{Int64Value: &i}})
+			returnValues = append(returnValues, []*protocol.FieldValue{{Int64Value: &i}})
 		case string:
-			returnValues = append(returnValues, []*protocol.FieldValue{&protocol.FieldValue{StringValue: &v}})
+			returnValues = append(returnValues, []*protocol.FieldValue{{StringValue: &v}})
 		case bool:
-			returnValues = append(returnValues, []*protocol.FieldValue{&protocol.FieldValue{BoolValue: &v}})
+			returnValues = append(returnValues, []*protocol.FieldValue{{BoolValue: &v}})
 		case float64:
-			returnValues = append(returnValues, []*protocol.FieldValue{&protocol.FieldValue{DoubleValue: &v}})
+			returnValues = append(returnValues, []*protocol.FieldValue{{DoubleValue: &v}})
 		}
 	}
 
@@ -1158,7 +1193,7 @@ func (self *FirstOrLastAggregator) ColumnNames() []string {
 func (self *FirstOrLastAggregator) GetValues(state interface{}) [][]*protocol.FieldValue {
 	s := state.(FirstOrLastAggregatorState)
 	return [][]*protocol.FieldValue{
-		[]*protocol.FieldValue{
+		{
 			s,
 		},
 	}

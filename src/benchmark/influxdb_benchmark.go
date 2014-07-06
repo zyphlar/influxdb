@@ -2,15 +2,20 @@ package main
 
 import (
 	crand "crypto/rand"
+	"crypto/tls"
 	"flag"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/influxdb/influxdb-go"
 	"io/ioutil"
 	"math/rand"
+	"net"
+	"net/http"
 	"os"
 	"runtime"
+	"sync"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/influxdb/influxdb-go"
 )
 
 type benchmarkConfig struct {
@@ -24,17 +29,32 @@ type benchmarkConfig struct {
 	Log                *os.File
 }
 
+type duration struct {
+	time.Duration
+}
+
+func (d *duration) UnmarshalText(text []byte) (err error) {
+	d.Duration, err = time.ParseDuration(string(text))
+	return err
+}
+
 type statsServer struct {
-	ConnectionString string `toml:"connection_string"`
-	User             string `toml:"user"`
-	Password         string `toml:"password"`
-	Database         string `toml:"database"`
+	ConnectionString string   `toml:"connection_string"`
+	User             string   `toml:"user"`
+	Password         string   `toml:"password"`
+	Database         string   `toml:"database"`
+	IsSecure         bool     `toml:"is_secure"`
+	SkipVerify       bool     `toml:"skip_verify"`
+	Timeout          duration `toml:"timeout"`
 }
 
 type clusterCredentials struct {
-	Database string `toml:"database"`
-	User     string `toml:"user"`
-	Password string `toml:"password"`
+	Database   string   `toml:"database"`
+	User       string   `toml:"user"`
+	Password   string   `toml:"password"`
+	IsSecure   bool     `toml:"is_secure"`
+	SkipVerify bool     `toml:"skip_verify"`
+	Timeout    duration `toml:"timeout"`
 }
 
 type server struct {
@@ -133,12 +153,11 @@ func main() {
 }
 
 type BenchmarkHarness struct {
-	Config                  *benchmarkConfig
-	writes                  chan *LoadWrite
-	loadDefinitionCompleted chan bool
-	done                    chan bool
-	success                 chan *successResult
-	failure                 chan *failureResult
+	Config *benchmarkConfig
+	writes chan *LoadWrite
+	sync.WaitGroup
+	success chan *successResult
+	failure chan *failureResult
 }
 
 type successResult struct {
@@ -152,6 +171,10 @@ type failureResult struct {
 	microseconds int64
 }
 
+func (fr failureResult) String() string {
+	return fmt.Sprintf("%s - %d", fr.err.Error(), fr.microseconds)
+}
+
 type LoadWrite struct {
 	LoadDefinition *loadDefinition
 	Series         []*influxdb.Series
@@ -159,15 +182,23 @@ type LoadWrite struct {
 
 const MAX_SUCCESS_REPORTS_TO_QUEUE = 100000
 
+func NewHttpClient(timeout time.Duration, skipVerify bool) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: skipVerify},
+			ResponseHeaderTimeout: timeout,
+			Dial: func(network, address string) (net.Conn, error) {
+				return net.DialTimeout(network, address, timeout)
+			},
+		},
+	}
+}
+
 func NewBenchmarkHarness(conf *benchmarkConfig) *BenchmarkHarness {
 	rand.Seed(time.Now().UnixNano())
 	harness := &BenchmarkHarness{
-		Config:                  conf,
-		loadDefinitionCompleted: make(chan bool),
-		done:    make(chan bool),
+		Config:  conf,
 		success: make(chan *successResult, MAX_SUCCESS_REPORTS_TO_QUEUE),
 		failure: make(chan *failureResult, 1000)}
-	go harness.trackRunningLoadDefinitions()
 	harness.startPostWorkers()
 	go harness.reportResults()
 	return harness
@@ -175,12 +206,14 @@ func NewBenchmarkHarness(conf *benchmarkConfig) *BenchmarkHarness {
 
 func (self *BenchmarkHarness) Run() {
 	for _, loadDef := range self.Config.LoadDefinitions {
+		def := loadDef
+		self.Add(1)
 		go func() {
-			self.runLoadDefinition(&loadDef)
-			self.loadDefinitionCompleted <- true
+			self.runLoadDefinition(&def)
+			self.Done()
 		}()
 	}
-	self.waitForCompletion()
+	self.Wait()
 }
 
 func (self *BenchmarkHarness) startPostWorkers() {
@@ -195,10 +228,13 @@ func (self *BenchmarkHarness) startPostWorkers() {
 
 func (self *BenchmarkHarness) reportClient() *influxdb.Client {
 	clientConfig := &influxdb.ClientConfig{
-		Host:     self.Config.StatsServer.ConnectionString,
-		Database: self.Config.StatsServer.Database,
-		Username: self.Config.StatsServer.User,
-		Password: self.Config.StatsServer.Password}
+		Host:       self.Config.StatsServer.ConnectionString,
+		Database:   self.Config.StatsServer.Database,
+		Username:   self.Config.StatsServer.User,
+		Password:   self.Config.StatsServer.Password,
+		IsSecure:   self.Config.StatsServer.IsSecure,
+		HttpClient: NewHttpClient(self.Config.StatsServer.Timeout.Duration, self.Config.StatsServer.SkipVerify),
+	}
 	client, _ := influxdb.NewClient(clientConfig)
 	return client
 }
@@ -248,25 +284,6 @@ func (self *BenchmarkHarness) reportResults() {
 				Columns: failureColumns,
 				Points:  [][]interface{}{{res.microseconds / 1000, res.err}}}
 			client.WriteSeries([]*influxdb.Series{s})
-		}
-	}
-}
-
-func (self *BenchmarkHarness) waitForCompletion() {
-	<-self.done
-	// TODO: fix this. Just a hack to give the reporting goroutines time to purge before the process quits.
-	time.Sleep(time.Second)
-}
-
-func (self *BenchmarkHarness) trackRunningLoadDefinitions() {
-	count := 0
-	loadDefinitionCount := len(self.Config.LoadDefinitions)
-	for {
-		<-self.loadDefinitionCompleted
-		count += 1
-		if count == loadDefinitionCount {
-			self.done <- true
-			return
 		}
 	}
 }
@@ -382,10 +399,13 @@ func (self *BenchmarkHarness) runQuery(loadDef *loadDefinition, seriesNames []st
 func (self *BenchmarkHarness) queryAndReport(loadDef *loadDefinition, q *query, queryString string) {
 	s := self.Config.Servers[rand.Intn(len(self.Config.Servers))]
 	clientConfig := &influxdb.ClientConfig{
-		Host:     s.ConnectionString,
-		Database: self.Config.ClusterCredentials.Database,
-		Username: self.Config.ClusterCredentials.User,
-		Password: self.Config.ClusterCredentials.Password}
+		Host:       s.ConnectionString,
+		Database:   self.Config.ClusterCredentials.Database,
+		Username:   self.Config.ClusterCredentials.User,
+		Password:   self.Config.ClusterCredentials.Password,
+		IsSecure:   self.Config.ClusterCredentials.IsSecure,
+		HttpClient: NewHttpClient(self.Config.ClusterCredentials.Timeout.Duration, self.Config.ClusterCredentials.SkipVerify),
+	}
 	client, err := influxdb.NewClient(clientConfig)
 	if err != nil {
 		// report query fail
@@ -429,10 +449,13 @@ func (self *BenchmarkHarness) reportQuerySuccess(results []*influxdb.Series, ser
 
 func (self *BenchmarkHarness) handleWrites(s *server) {
 	clientConfig := &influxdb.ClientConfig{
-		Host:     s.ConnectionString,
-		Database: self.Config.ClusterCredentials.Database,
-		Username: self.Config.ClusterCredentials.User,
-		Password: self.Config.ClusterCredentials.Password}
+		Host:       s.ConnectionString,
+		Database:   self.Config.ClusterCredentials.Database,
+		Username:   self.Config.ClusterCredentials.User,
+		Password:   self.Config.ClusterCredentials.Password,
+		IsSecure:   self.Config.ClusterCredentials.IsSecure,
+		HttpClient: NewHttpClient(self.Config.ClusterCredentials.Timeout.Duration, self.Config.ClusterCredentials.SkipVerify),
+	}
 	client, err := influxdb.NewClient(clientConfig)
 	if err != nil {
 		panic(fmt.Sprintf("Error connecting to server \"%s\": %s", s.ConnectionString, err))

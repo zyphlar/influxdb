@@ -155,7 +155,6 @@ func (s *RaftServer) doOrProxyCommandOnce(command raft.Command) (interface{}, er
 			return SendCommandToServer(leader, command)
 		}
 	}
-	return nil, nil
 }
 
 func SendCommandToServer(url string, command raft.Command) (interface{}, error) {
@@ -223,7 +222,7 @@ func (s *RaftServer) SaveClusterAdminUser(u *cluster.ClusterAdmin) error {
 }
 
 func (s *RaftServer) CreateRootUser() error {
-	u := &cluster.ClusterAdmin{cluster.CommonUser{"root", "", false, "root"}}
+	u := &cluster.ClusterAdmin{cluster.CommonUser{Name: "root", Hash: "", IsUserDeleted: false, CacheKey: "root"}}
 	password := os.Getenv(DEFAULT_ROOT_PWD_ENVKEY)
 	if password == "" {
 		password = DEFAULT_ROOT_PWD
@@ -412,8 +411,6 @@ func (s *RaftServer) startRaft() error {
 		log.Warn("Couldn't join any of the seeds, sleeping and retrying...")
 		time.Sleep(100 * time.Millisecond)
 	}
-
-	return nil
 }
 
 func (s *RaftServer) raftEventHandler(e raft.Event) {
@@ -560,6 +557,26 @@ func (s *RaftServer) HandleFunc(pattern string, handler func(http.ResponseWriter
 }
 
 // Joins to the leader of an existing cluster.
+func (s *RaftServer) RemoveServer(id uint32) error {
+	command := &InfluxForceLeaveCommand{
+		Id: id,
+	}
+	for _, s := range s.raftServer.Peers() {
+		// send the command and ignore errors in case a server is down
+		SendCommandToServer(s.ConnectionString, command)
+	}
+
+	if _, err := command.Apply(s.raftServer); err != nil {
+		return err
+	}
+
+	// make the change permament
+	log.Info("Running the actual command")
+	_, err := s.doOrProxyCommand(command)
+	return err
+}
+
+// Joins to the leader of an existing cluster.
 func (s *RaftServer) Join(leader string) error {
 	command := &InfluxJoinCommand{
 		Name:                     s.raftServer.Name(),
@@ -598,7 +615,7 @@ func (s *RaftServer) Join(leader string) error {
 }
 
 func (s *RaftServer) retryCommand(command raft.Command, retries int) (ret interface{}, err error) {
-	for retries = retries; retries > 0; retries-- {
+	for ; retries > 0; retries-- {
 		ret, err = s.raftServer.Do(command)
 		if err == nil {
 			return ret, nil

@@ -30,14 +30,15 @@ func NewProtobufRequestHandler(coordinator Coordinator, clusterConfig *cluster.C
 }
 
 func (self *ProtobufRequestHandler) HandleRequest(request *protocol.Request, conn net.Conn) error {
-	if *request.Type == protocol.Request_WRITE {
+	switch *request.Type {
+	case protocol.Request_WRITE:
 		go self.handleWrites(request, conn)
-	} else if *request.Type == protocol.Request_QUERY {
+	case protocol.Request_QUERY:
 		go self.handleQuery(request, conn)
-	} else if *request.Type == protocol.Request_HEARTBEAT {
+	case protocol.Request_HEARTBEAT:
 		response := &protocol.Response{RequestId: request.Id, Type: &heartbeatResponse}
 		return self.WriteResponse(conn, response)
-	} else {
+	default:
 		log.Error("unknown request type: %v", request)
 		return errors.New("Unknown request type")
 	}
@@ -105,15 +106,10 @@ func (self *ProtobufRequestHandler) handleQuery(request *protocol.Request, conn 
 }
 
 func (self *ProtobufRequestHandler) WriteResponse(conn net.Conn, response *protocol.Response) error {
-	data, err := response.Encode()
-	if err != nil {
-		log.Error("error encoding response: %s", err)
-		return err
-	}
-	if len(data) >= MAX_RESPONSE_SIZE {
-		pointCount := len(response.Series.Points)
-		firstHalfPoints := response.Series.Points[:pointCount]
-		secondHalfPoints := response.Series.Points[pointCount:]
+	if response.Size() >= MAX_RESPONSE_SIZE {
+		l := len(response.Series.Points)
+		firstHalfPoints := response.Series.Points[:l/2]
+		secondHalfPoints := response.Series.Points[l/2:]
 		response.Series.Points = firstHalfPoints
 		err := self.WriteResponse(conn, response)
 		if err != nil {
@@ -121,6 +117,12 @@ func (self *ProtobufRequestHandler) WriteResponse(conn net.Conn, response *proto
 		}
 		response.Series.Points = secondHalfPoints
 		return self.WriteResponse(conn, response)
+	}
+
+	data, err := response.Encode()
+	if err != nil {
+		log.Error("error encoding response: %s", err)
+		return err
 	}
 
 	buff := bytes.NewBuffer(make([]byte, 0, len(data)+8))

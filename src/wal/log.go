@@ -20,7 +20,7 @@ type log struct {
 	file                   *os.File
 	requestsSinceLastFlush int
 	config                 *configuration.Configuration
-	cachedSuffix           int
+	cachedSuffix           uint32
 }
 
 func newLog(file *os.File, config *configuration.Configuration) (*log, error) {
@@ -31,7 +31,7 @@ func newLog(file *os.File, config *configuration.Configuration) (*log, error) {
 
 	size := uint64(info.Size())
 	suffixString := strings.TrimLeft(path.Base(file.Name()), "log.")
-	suffix, err := strconv.Atoi(suffixString)
+	suffix, err := strconv.ParseUint(suffixString, 10, 32)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func newLog(file *os.File, config *configuration.Configuration) (*log, error) {
 		fileSize:     size,
 		closed:       false,
 		config:       config,
-		cachedSuffix: suffix,
+		cachedSuffix: uint32(suffix),
 	}
 
 	return l, l.check()
@@ -67,15 +67,29 @@ func (self *log) check() error {
 			return err
 		}
 		if n == 0 || hdr.length == 0 {
+			logger.Warn("%s was truncated to %d since the file has a zero size request", self.file.Name(), offset)
 			return self.file.Truncate(offset)
 		}
 		if offset+int64(n)+int64(hdr.length) > size {
 			// file is incomplete, truncate
+			logger.Warn("%s was truncated to %d since the file ends prematurely", self.file.Name(), offset)
 			return self.file.Truncate(offset)
 		}
-		if err := self.skipRequest(file, hdr); err != nil {
+		bytes := make([]byte, hdr.length)
+		_, err = file.Read(bytes)
+		if err != nil {
 			return err
 		}
+
+		// this request is invalid truncate file
+		req := &protocol.Request{}
+		err = req.Decode(bytes)
+		if err != nil {
+			logger.Warn("%s was truncated to %d since the end of the file contains invalid data", self.file.Name(), offset)
+			// truncate file and return
+			return self.file.Truncate(offset)
+		}
+
 		offset += int64(n) + int64(hdr.length)
 	}
 }
@@ -85,7 +99,7 @@ func (self *log) offset() int64 {
 	return offset
 }
 
-func (self *log) suffix() int {
+func (self *log) suffix() uint32 {
 	return self.cachedSuffix
 }
 

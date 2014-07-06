@@ -17,6 +17,7 @@ import (
 	"protocol"
 	"testing"
 	"time"
+
 	. "launchpad.net/gocheck"
 )
 
@@ -118,7 +119,7 @@ func (self *MockCoordinator) CreateDatabase(_ User, db string) error {
 }
 
 func (self *MockCoordinator) ListDatabases(_ User) ([]*cluster.Database, error) {
-	return []*cluster.Database{&cluster.Database{"db1"}, &cluster.Database{"db2"}}, nil
+	return []*cluster.Database{{"db1"}, {"db2"}}, nil
 }
 
 func (self *MockCoordinator) DropDatabase(_ User, db string) error {
@@ -134,8 +135,8 @@ func (self *MockCoordinator) ListContinuousQueries(_ User, db string) ([]*protoc
 		queryString := query.Query
 		points = append(points, &protocol.Point{
 			Values: []*protocol.FieldValue{
-				&protocol.FieldValue{Int64Value: &queryId},
-				&protocol.FieldValue{StringValue: &queryString},
+				{Int64Value: &queryId},
+				{StringValue: &queryString},
 			},
 			Timestamp:      nil,
 			SequenceNumber: nil,
@@ -143,7 +144,7 @@ func (self *MockCoordinator) ListContinuousQueries(_ User, db string) ([]*protoc
 	}
 
 	seriesName := "continuous queries"
-	series := []*protocol.Series{&protocol.Series{
+	series := []*protocol.Series{{
 		Name:   &seriesName,
 		Fields: []string{"id", "query"},
 		Points: points,
@@ -171,15 +172,15 @@ func (self *ApiSuite) formatUrl(path string, args ...interface{}) string {
 func (self *ApiSuite) SetUpSuite(c *C) {
 	self.coordinator = &MockCoordinator{
 		continuousQueries: map[string][]*cluster.ContinuousQuery{
-			"db1": []*cluster.ContinuousQuery{
-				&cluster.ContinuousQuery{1, "select * from foo into bar;"},
+			"db1": {
+				{1, "select * from foo into bar;"},
 			},
 		},
 	}
 
 	self.manager = &MockUserManager{
 		clusterAdmins: []string{"root"},
-		dbUsers:       map[string]map[string]MockDbUser{"db1": map[string]MockDbUser{"db_user1": {Name: "db_user1", IsAdmin: false}}},
+		dbUsers:       map[string]map[string]MockDbUser{"db1": {"db_user1": {Name: "db_user1", IsAdmin: false}}},
 	}
 	dir := c.MkDir()
 	self.server = NewHttpServer(
@@ -357,6 +358,52 @@ func (self *ApiSuite) TestNotChunkedQuery(c *C) {
 	c.Assert(int64(series[0].Points[0][0].(float64)), Equals, int64(1381346631000))
 }
 
+func (self *ApiSuite) TestNotChunkedPrettyQuery(c *C) {
+	query := "select * from foo where column_one == 'some_value';"
+	query = url.QueryEscape(query)
+	addr := self.formatUrl("/db/foo/series?q=%s&u=dbuser&p=password&pretty=true", query)
+	resp, err := libhttp.Get(addr)
+	c.Assert(err, IsNil)
+	defer resp.Body.Close()
+	c.Assert(resp.StatusCode, Equals, libhttp.StatusOK)
+	c.Assert(resp.Header.Get("content-type"), Equals, "application/json")
+	data, err := ioutil.ReadAll(resp.Body)
+	c.Assert(err, IsNil)
+	series := []SerializedSeries{}
+	err = json.Unmarshal(data, &series)
+	c.Assert(err, IsNil)
+	c.Assert(series, HasLen, 1)
+	c.Assert(series[0].Name, Equals, "foo")
+	// time, seq, column_one, column_two
+	c.Assert(series[0].Columns, HasLen, 4)
+	c.Assert(series[0].Points, HasLen, 4)
+	// timestamp precision is milliseconds by default
+	c.Assert(int64(series[0].Points[0][0].(float64)), Equals, int64(1381346631000))
+}
+
+func (self *ApiSuite) TestNotChunkedNotPrettyQuery(c *C) {
+	query := "select * from foo where column_one == 'some_value';"
+	query = url.QueryEscape(query)
+	addr := self.formatUrl("/db/foo/series?q=%s&u=dbuser&p=password&pretty=false", query)
+	resp, err := libhttp.Get(addr)
+	c.Assert(err, IsNil)
+	defer resp.Body.Close()
+	c.Assert(resp.StatusCode, Equals, libhttp.StatusOK)
+	c.Assert(resp.Header.Get("content-type"), Equals, "application/json")
+	data, err := ioutil.ReadAll(resp.Body)
+	c.Assert(err, IsNil)
+	series := []SerializedSeries{}
+	err = json.Unmarshal(data, &series)
+	c.Assert(err, IsNil)
+	c.Assert(series, HasLen, 1)
+	c.Assert(series[0].Name, Equals, "foo")
+	// time, seq, column_one, column_two
+	c.Assert(series[0].Columns, HasLen, 4)
+	c.Assert(series[0].Points, HasLen, 4)
+	// timestamp precision is milliseconds by default
+	c.Assert(int64(series[0].Points[0][0].(float64)), Equals, int64(1381346631000))
+}
+
 func (self *ApiSuite) TestChunkedQuery(c *C) {
 	query := "select * from foo where column_one == 'some_value';"
 	query = url.QueryEscape(query)
@@ -369,7 +416,30 @@ func (self *ApiSuite) TestChunkedQuery(c *C) {
 	for i := 0; i < 2; i++ {
 		chunk := make([]byte, 2048, 2048)
 		n, err := resp.Body.Read(chunk)
+
+		series := SerializedSeries{}
+		err = json.Unmarshal(chunk[0:n], &series)
 		c.Assert(err, IsNil)
+		c.Assert(series.Name, Equals, "foo")
+		// time, seq, column_one, column_two
+		c.Assert(series.Columns, HasLen, 4)
+		// each chunk should have 2 points
+		c.Assert(series.Points, HasLen, 2)
+	}
+}
+
+func (self *ApiSuite) TestPrettyChunkedQuery(c *C) {
+	query := "select * from foo where column_one == 'some_value';"
+	query = url.QueryEscape(query)
+	addr := self.formatUrl("/db/foo/series?q=%s&chunked=true&u=dbuser&p=password&pretty=true", query)
+	resp, err := libhttp.Get(addr)
+	c.Assert(err, IsNil)
+	defer resp.Body.Close()
+	c.Assert(resp.Header.Get("content-type"), Equals, "application/json")
+
+	for i := 0; i < 2; i++ {
+		chunk := make([]byte, 2048, 2048)
+		n, err := resp.Body.Read(chunk)
 
 		series := SerializedSeries{}
 		err = json.Unmarshal(chunk[0:n], &series)
@@ -494,7 +564,7 @@ func (self *ApiSuite) TestWriteDataWithNull(c *C) {
 	c.Assert(series.Points, HasLen, 3)
 	c.Assert(*series.Points[2].Values[0].StringValue, Equals, "3")
 	c.Assert(*series.Points[2].Values[1].Int64Value, Equals, int64(3))
-	c.Assert(*series.Points[2].Values[2].Int64Value, Equals, int64(3))
+	c.Assert(*series.Points[2].Values[2].DoubleValue, Equals, 3.0)
 	c.Assert(series.Points[2].Values[3].GetIsNull(), Equals, true)
 }
 
@@ -531,7 +601,7 @@ func (self *ApiSuite) TestWriteData(c *C) {
 	c.Assert(series.Points, HasLen, 3)
 	c.Assert(*series.Points[0].Values[0].StringValue, Equals, "1")
 	c.Assert(*series.Points[0].Values[1].Int64Value, Equals, int64(1))
-	c.Assert(*series.Points[0].Values[2].Int64Value, Equals, int64(1))
+	c.Assert(*series.Points[0].Values[2].DoubleValue, Equals, 1.0)
 	c.Assert(*series.Points[0].Values[3].BoolValue, Equals, true)
 }
 
@@ -703,11 +773,40 @@ func (self *ApiSuite) TestClusterAdminsIndex(c *C) {
 	users := []*ApiUser{}
 	err = json.Unmarshal(body, &users)
 	c.Assert(err, IsNil)
-	c.Assert(users, DeepEquals, []*ApiUser{&ApiUser{"root"}})
+	c.Assert(users, DeepEquals, []*ApiUser{{"root"}})
+}
+
+func (self *ApiSuite) TestPrettyClusterAdminsIndex(c *C) {
+	url := self.formatUrl("/cluster_admins?u=root&p=root&pretty=true")
+	resp, err := libhttp.Get(url)
+	c.Assert(err, IsNil)
+	c.Assert(resp.Header.Get("content-type"), Equals, "application/json")
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	c.Assert(err, IsNil)
+	users := []*ApiUser{}
+	err = json.Unmarshal(body, &users)
+	c.Assert(err, IsNil)
+	c.Assert(users, DeepEquals, []*ApiUser{{"root"}})
 }
 
 func (self *ApiSuite) TestDbUsersIndex(c *C) {
 	url := self.formatUrl("/db/db1/users?u=root&p=root")
+	resp, err := libhttp.Get(url)
+	c.Assert(err, IsNil)
+	c.Assert(resp.Header.Get("content-type"), Equals, "application/json")
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	c.Assert(err, IsNil)
+	users := []*UserDetail{}
+	err = json.Unmarshal(body, &users)
+	c.Assert(err, IsNil)
+	c.Assert(users, HasLen, 1)
+	c.Assert(users[0], DeepEquals, &UserDetail{"db_user1", false})
+}
+
+func (self *ApiSuite) TestPrettyDbUsersIndex(c *C) {
+	url := self.formatUrl("/db/db1/users?u=root&p=root&pretty=true")
 	resp, err := libhttp.Get(url)
 	c.Assert(err, IsNil)
 	c.Assert(resp.Header.Get("content-type"), Equals, "application/json")
@@ -749,7 +848,7 @@ func (self *ApiSuite) TestDatabasesIndex(c *C) {
 		c.Assert(err, IsNil)
 		err = json.Unmarshal(body, &databases)
 		c.Assert(err, IsNil)
-		c.Assert(databases, DeepEquals, []*cluster.Database{&cluster.Database{"db1"}, &cluster.Database{"db2"}})
+		c.Assert(databases, DeepEquals, []*cluster.Database{{"db1"}, {"db2"}})
 	}
 }
 
@@ -768,7 +867,7 @@ func (self *ApiSuite) TestBasicAuthentication(c *C) {
 	c.Assert(err, IsNil)
 	err = json.Unmarshal(body, &databases)
 	c.Assert(err, IsNil)
-	c.Assert(databases, DeepEquals, []*cluster.Database{&cluster.Database{"db1"}, &cluster.Database{"db2"}})
+	c.Assert(databases, DeepEquals, []*cluster.Database{{"db1"}, {"db2"}})
 }
 
 func (self *ApiSuite) TestContinuousQueryOperations(c *C) {

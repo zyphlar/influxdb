@@ -88,6 +88,10 @@ func (self *ClusterAdmin) IsClusterAdmin() bool {
 	return true
 }
 
+func (self *ClusterAdmin) IsDbAdmin(_ string) bool {
+	return true
+}
+
 func (self *ClusterAdmin) HasWriteAccess(_ string) bool {
 	return true
 }
@@ -133,8 +137,8 @@ func (self *DbUser) GetDb() string {
 }
 
 func (self *DbUser) ChangePermissions(readPermissions, writePermissions string) {
-	self.ReadFrom = []*Matcher{&Matcher{true, readPermissions}}
-	self.WriteTo = []*Matcher{&Matcher{true, writePermissions}}
+	self.ReadFrom = []*Matcher{{true, readPermissions}}
+	self.WriteTo = []*Matcher{{true, writePermissions}}
 }
 
 func HashPassword(password string) ([]byte, error) {

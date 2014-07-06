@@ -1,10 +1,53 @@
-## v0.7.1 [unreleased]
+## v0.7.4 [unreleased]
+
+### Features
+
+- [Issue #643](https://github.com/influxdb/influxdb/issues/643). Support pretty print json. (Thanks, @otoolep)
+- [Issue #641](https://github.com/influxdb/influxdb/issues/641). Support multiple storage engines
+- [Issue #665](https://github.com/influxdb/influxdb/issues/665). Make build tmp directory configurable in the make file
+- [Issue #667](https://github.com/influxdb/influxdb/issues/667). Enable compression on all GET requests and when writing data
 
 ### Bugfixes
+
+- [Issue #651](https://github.com/influxdb/influxdb/issues/651). Change permissions of symlink which fix some installation issues. (Thanks, @Dieterbe)
+- [Issue #670](https://github.com/influxdb/influxdb/issues/670). Don't warn on missing influxdb user on fresh installs
+- [Issue #676](https://github.com/influxdb/influxdb/issues/676). Allow storing high precision integer values without losing any information
+
+## v0.7.3 [2014-06-13]
+
+### Bugfixes
+
+- [Issue #637](https://github.com/influxdb/influxdb/issues/637). Truncate log files if the last request wasn't written properly
+- [Issue #646](https://github.com/influxdb/influxdb/issues/646). CRITICAL: Duplicate shard ids for new shards if old shards are deleted.
+
+## v0.7.2 [2014-05-30]
+
+### Features
+
+- [Issue #521](https://github.com/influxdb/influxdb/issues/521). MODE works on all datatypes (Thanks, @richthegeek)
+
+### Bugfixes
+
+- [Issue #418](https://github.com/influxdb/influxdb/pull/418). Requests or responses larger than MAX_REQUEST_SIZE break things.
+- [Issue #606](https://github.com/influxdb/influxdb/issues/606). InfluxDB will fail to start with invalid permission if log.txt didn't exist
+- [Issue #602](https://github.com/influxdb/influxdb/issues/602). Merge will fail to work across shards
+
+### Features
+
+## v0.7.1 [2014-05-29]
+
+### Bugfixes
+
+- [Issue #579](https://github.com/influxdb/influxdb/issues/579). Reject writes to nonexistent databases
+- [Issue #597](https://github.com/influxdb/influxdb/issues/597). Force compaction after deleting data
 
 ### Features
 
 - [Issue #476](https://github.com/influxdb/influxdb/issues/476). Support ARM architecture
+- [Issue #578](https://github.com/influxdb/influxdb/issues/578). Support aliasing for expressions in parenthesis
+- [Issue #544](https://github.com/influxdb/influxdb/pull/544). Support forcing node removal from a cluster
+- [Issue #591](https://github.com/influxdb/influxdb/pull/591). Support multiple udp input plugins (Thanks, @tpitale)
+- [Issue #600](https://github.com/influxdb/influxdb/pull/600). Report version, os, arch, and raftName once per day.
 
 ## v0.7.0 [2014-05-23]
 

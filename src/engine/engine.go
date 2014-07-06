@@ -201,6 +201,24 @@ func (self *QueryEngine) Close() {
 		}
 	}
 
+	// make sure we yield an empty series for series without points
+	fromClause := self.query.GetFromClause()
+	if fromClause.Type == parser.FromClauseMerge {
+		for _, s := range []string{fromClause.Names[0].Name.Name, fromClause.Names[1].Name.Name} {
+			if _, ok := self.seriesToPoints[s]; ok {
+				continue
+			}
+
+			err := self.yield(&protocol.Series{
+				Name:   &s,
+				Fields: []string{},
+			})
+			if err != nil {
+				log.Error("Error while closing engine: %s", err)
+			}
+		}
+	}
+
 	if self.isAggregateQuery {
 		self.runAggregates()
 	}
@@ -232,12 +250,12 @@ func (self *QueryEngine) SendQueryStats() {
 
 	point := &protocol.Point{
 		Values: []*protocol.FieldValue{
-			&protocol.FieldValue{StringValue: &engineName},
-			&protocol.FieldValue{Int64Value: &shardId},
-			&protocol.FieldValue{BoolValue: &shardLocal},
-			&protocol.FieldValue{DoubleValue: &runTime},
-			&protocol.FieldValue{Int64Value: &pointsRead},
-			&protocol.FieldValue{Int64Value: &pointsWritten},
+			{StringValue: &engineName},
+			{Int64Value: &shardId},
+			{BoolValue: &shardLocal},
+			{DoubleValue: &runTime},
+			{Int64Value: &pointsRead},
+			{Int64Value: &pointsWritten},
 		},
 		Timestamp: &timestamp,
 	}
@@ -289,7 +307,7 @@ func (self *PointRange) UpdateRange(point *protocol.Point) {
 
 func crossProduct(values [][][]*protocol.FieldValue) [][]*protocol.FieldValue {
 	if len(values) == 0 {
-		return [][]*protocol.FieldValue{[]*protocol.FieldValue{}}
+		return [][]*protocol.FieldValue{{}}
 	}
 
 	_returnedValues := crossProduct(values[:len(values)-1])
@@ -467,7 +485,7 @@ func (self *QueryEngine) aggregateValuesForSeries(series *protocol.Series) error
 }
 
 func (self *QueryEngine) runAggregates() {
-	for t, _ := range self.seriesStates {
+	for t := range self.seriesStates {
 		self.runAggregatesForTable(t)
 	}
 }
@@ -596,7 +614,7 @@ func (self *QueryEngine) getValuesForGroup(table string, group []*protocol.Field
 
 		// FIXME: this should be looking at the fields slice not the group by clause
 		// FIXME: we should check whether the selected columns are in the group by clause
-		for idx, _ := range self.elems {
+		for idx := range self.elems {
 			point.Values = append(point.Values, group[idx])
 		}
 
@@ -634,7 +652,7 @@ func (self *QueryEngine) executeArithmeticQuery(query *parser.SelectQuery, yield
 		}
 
 		// create the new column names
-		for name, _ := range names {
+		for name := range names {
 			newSeries.Fields = append(newSeries.Fields, name)
 		}
 

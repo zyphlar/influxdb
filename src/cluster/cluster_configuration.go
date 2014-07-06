@@ -77,6 +77,7 @@ type ClusterConfiguration struct {
 	wal                        WAL
 	longTermShards             []*ShardData
 	shortTermShards            []*ShardData
+	lastShardIdUsed            uint32
 	random                     *rand.Rand
 	lastServerToGetShard       *ClusterServer
 	shardCreator               ShardCreator
@@ -221,6 +222,24 @@ func (self *ClusterConfiguration) ChangeProtobufConnectionString(server *Cluster
 	server.Connect()
 }
 
+func (self *ClusterConfiguration) RemoveServer(server *ClusterServer) error {
+	server.connection.Close()
+	i := 0
+	l := len(self.servers)
+	for i = 0; i < l; i++ {
+		if self.servers[i].Id == server.Id {
+			log.Debug("Found server %d at index %d", server.Id, i)
+			break
+		}
+	}
+	if i == l {
+		return fmt.Errorf("Cannot find server %d", server.Id)
+	}
+	self.servers[i], self.servers = self.servers[l-1], self.servers[:l-1]
+	log.Debug("Removed server %d", server.Id)
+	return nil
+}
+
 func (self *ClusterConfiguration) AddPotentialServer(server *ClusterServer) {
 	self.serversLock.Lock()
 	defer self.serversLock.Unlock()
@@ -257,12 +276,20 @@ func (self *ClusterConfiguration) AddPotentialServer(server *ClusterServer) {
 	return
 }
 
+func (self *ClusterConfiguration) DatabasesExists(db string) bool {
+	self.createDatabaseLock.RLock()
+	defer self.createDatabaseLock.RUnlock()
+
+	_, ok := self.DatabaseReplicationFactors[db]
+	return ok
+}
+
 func (self *ClusterConfiguration) GetDatabases() []*Database {
 	self.createDatabaseLock.RLock()
 	defer self.createDatabaseLock.RUnlock()
 
 	dbs := make([]*Database, 0, len(self.DatabaseReplicationFactors))
-	for name, _ := range self.DatabaseReplicationFactors {
+	for name := range self.DatabaseReplicationFactors {
 		dbs = append(dbs, &Database{Name: name})
 	}
 	return dbs
@@ -343,7 +370,7 @@ func (self *ClusterConfiguration) addContinuousQuery(db string, query *Continuou
 
 	selectQuery, err := parser.ParseSelectQuery(query.Query)
 	if err != nil {
-		return fmt.Errorf("Failed to parse continuous query: %s", query)
+		return fmt.Errorf("Failed to parse continuous query: %s", query.Query)
 	}
 
 	if self.ParsedContinuousQueries[db] == nil {
@@ -398,7 +425,7 @@ func (self *ClusterConfiguration) GetDbUsers(db string) []common.User {
 
 	dbUsers := self.dbUsers[db]
 	users := make([]common.User, 0, len(dbUsers))
-	for name, _ := range dbUsers {
+	for name := range dbUsers {
 		dbUser := dbUsers[name]
 		users = append(users, dbUser)
 	}
@@ -468,7 +495,7 @@ func (self *ClusterConfiguration) GetClusterAdmins() (names []string) {
 	defer self.usersLock.RUnlock()
 
 	clusterAdmins := self.clusterAdmins
-	for name, _ := range clusterAdmins {
+	for name := range clusterAdmins {
 		names = append(names, name)
 	}
 	return
@@ -501,6 +528,7 @@ type SavedConfiguration struct {
 	LongTermShards    []*NewShardData
 	ContinuousQueries map[string][]*ContinuousQuery
 	Metastore         metastore.Store
+	LastShardIdUsed   uint32
 }
 
 func (self *ClusterConfiguration) Save() ([]byte, error) {
@@ -513,9 +541,10 @@ func (self *ClusterConfiguration) Save() ([]byte, error) {
 		ContinuousQueries: self.continuousQueries,
 		ShortTermShards:   self.convertShardsToNewShardData(self.shortTermShards),
 		LongTermShards:    self.convertShardsToNewShardData(self.longTermShards),
+		LastShardIdUsed:   self.lastShardIdUsed,
 	}
 
-	for k, _ := range self.DatabaseReplicationFactors {
+	for k := range self.DatabaseReplicationFactors {
 		data.Databases[k] = 0
 	}
 
@@ -569,7 +598,7 @@ func (self *ClusterConfiguration) Recovery(b []byte) error {
 	}
 
 	self.DatabaseReplicationFactors = make(map[string]struct{}, len(data.Databases))
-	for k, _ := range data.Databases {
+	for k := range data.Databases {
 		self.DatabaseReplicationFactors[k] = struct{}{}
 	}
 	self.clusterAdmins = data.Admins
@@ -599,13 +628,27 @@ func (self *ClusterConfiguration) Recovery(b []byte) error {
 	defer self.shardLock.Unlock()
 	self.shortTermShards = self.convertNewShardDataToShards(data.ShortTermShards)
 	self.longTermShards = self.convertNewShardDataToShards(data.LongTermShards)
+
+	highestShardId := uint32(0)
 	for _, s := range self.shortTermShards {
 		shard := s
 		self.shardsById[s.id] = shard
+		if s.id > highestShardId {
+			highestShardId = s.id
+		}
 	}
 	for _, s := range self.longTermShards {
 		shard := s
 		self.shardsById[s.id] = shard
+		if s.id > highestShardId {
+			highestShardId = s.id
+		}
+	}
+
+	if data.LastShardIdUsed == 0 {
+		self.lastShardIdUsed = highestShardId
+	} else {
+		self.lastShardIdUsed = data.LastShardIdUsed
 	}
 
 	for db, queries := range data.ContinuousQueries {
@@ -655,7 +698,7 @@ func (self *ClusterConfiguration) SetLastContinuousQueryRunTime(t time.Time) {
 func (self *ClusterConfiguration) GetMapForJsonSerialization() map[string]interface{} {
 	jsonObject := make(map[string]interface{})
 	dbs := make([]string, 0)
-	for db, _ := range self.DatabaseReplicationFactors {
+	for db := range self.DatabaseReplicationFactors {
 		dbs = append(dbs, db)
 	}
 	jsonObject["databases"] = dbs
@@ -744,7 +787,7 @@ func (self *ClusterConfiguration) createShards(microsecondsEpoch int64, shardTyp
 			rf = len(self.servers)
 		}
 
-		for rf = rf; rf > 0; rf-- {
+		for ; rf > 0; rf-- {
 			if startIndex >= len(self.servers) {
 				startIndex = 0
 			}
@@ -905,7 +948,8 @@ func (self *ClusterConfiguration) AddShards(shards []*NewShardData) ([]*ShardDat
 
 	durationIsSplit := len(shards) > 1
 	for _, newShard := range shards {
-		id := uint32(len(self.GetAllShards()) + 1)
+		id := self.lastShardIdUsed + 1
+		self.lastShardIdUsed = id
 		shard := NewShard(id, newShard.StartTime, newShard.EndTime, shardType, durationIsSplit, self.wal)
 		servers := make([]*ClusterServer, 0)
 		for _, serverId := range newShard.ServerIds {
@@ -940,7 +984,7 @@ func (self *ClusterConfiguration) AddShards(shards []*NewShardData) ([]*ShardDat
 
 		createdShards = append(createdShards, shard)
 
-		log.Info("%s: %d - start: %s (%d). end: %s (%d). isLocal: %d. servers: %s",
+		log.Info("%s: %d - start: %s (%d). end: %s (%d). isLocal: %v. servers: %v",
 			message, shard.Id(),
 			shard.StartTime().Format("Mon Jan 2 15:04:05 -0700 MST 2006"), shard.StartTime().Unix(),
 			shard.EndTime().Format("Mon Jan 2 15:04:05 -0700 MST 2006"), shard.EndTime().Unix(),

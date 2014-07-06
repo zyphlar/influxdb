@@ -33,7 +33,7 @@ func (self *ServerSuite) SetUpSuite(c *C) {
 	}
 	self.serverProcesses[0].SetSslOnly(true)
 	client := self.serverProcesses[0].GetClient("", c)
-	dbs := []string{"full_rep", "test_rep", "single_rep", "test_cq", "test_cq_null", "drop_db"}
+	dbs := []string{"full_rep", "test_rep", "single_rep", "graphite_db", "udp_db", "test_cq", "test_cq_null", "drop_db"}
 	for _, db := range dbs {
 		c.Assert(client.CreateDatabase(db), IsNil)
 	}
@@ -50,6 +50,23 @@ func (self *ServerSuite) SetUpSuite(c *C) {
 func (self *ServerSuite) TearDownSuite(c *C) {
 	for _, s := range self.serverProcesses {
 		s.Stop()
+	}
+}
+
+func (self *ServerSuite) TestLargeRequestSize(c *C) {
+	client := self.serverProcesses[0].GetClient("db1", c)
+	c.Assert(client.CreateDatabase("db1"), IsNil)
+	numberOfPoints := 2 * 1024 * 1024
+	data := CreatePoints("test_large_requests", 1, numberOfPoints)
+	self.serverProcesses[0].WriteData(data, c)
+	for _, s := range self.serverProcesses {
+		s.WaitForServerToSync()
+	}
+	for _, s := range self.serverProcesses {
+		data = s.RunQueryAsRoot("select count(column0) from test_large_requests", "m", c)
+		c.Assert(data, HasLen, 1)
+		c.Assert(data[0].Points, HasLen, 1)
+		c.Assert(data[0].Points[0][1], Equals, float64(numberOfPoints))
 	}
 }
 
@@ -727,7 +744,7 @@ func (self *ServerSuite) TestContinuousQueryGroupByOperationsWithNullColumns(c *
 			values = append(values, 2)
 		}
 		series := []*influxdb.Series{
-			&influxdb.Series{
+			{
 				Name:    "test_null_columns",
 				Columns: columns,
 				Points: [][]interface{}{
@@ -1146,7 +1163,7 @@ func (self *ServerSuite) TestChangingRaftPort(c *C) {
 		Name:    "test",
 		Columns: []string{"value"},
 		Points: [][]interface{}{
-			[]interface{}{1.0},
+			{1.0},
 		},
 	}
 	client = server1.GetClient("change_raft_port", c)

@@ -135,16 +135,15 @@ func (self *ClusterServer) heartbeat() {
 		self.heartbeatStarted = false
 	}()
 
-	heartbeatRequest := &protocol.Request{
-		Type:     &HEARTBEAT_TYPE,
-		Database: protocol.String(""),
-	}
 	for {
 		// this chan is buffered and in the loop on purpose. This is so
 		// that if reading a heartbeat times out, and the heartbeat then comes through
 		// later, it will be dumped into this chan and not block the protobuf client reader.
 		responseChan := make(chan *protocol.Response, 1)
-		heartbeatRequest.Id = nil
+		heartbeatRequest := &protocol.Request{
+			Type:     &HEARTBEAT_TYPE,
+			Database: protocol.String(""),
+		}
 		self.MakeRequest(heartbeatRequest, responseChan)
 		err := self.getHeartbeatResponse(responseChan)
 		if err != nil {
@@ -158,7 +157,7 @@ func (self *ClusterServer) heartbeat() {
 		// otherwise, reset the backoff and mark the server as up
 		self.isUp = true
 		self.Backoff = self.MinBackoff
-		<-time.After(self.HeartbeatInterval)
+		time.Sleep(self.HeartbeatInterval)
 	}
 }
 
@@ -172,8 +171,9 @@ func (self *ClusterServer) getHeartbeatResponse(responseChan <-chan *protocol.Re
 		if *response.Type != protocol.Response_HEARTBEAT {
 			return fmt.Errorf("Server returned a non heartbeat response")
 		}
-	case <-time.After(HEARTBEAT_TIMEOUT):
-		return fmt.Errorf("Server failed to return heartbeat in 100ms: %d", self.Id)
+
+	case <-time.After(self.HeartbeatInterval):
+		return fmt.Errorf("Server failed to return heartbeat in %s: %d", self.HeartbeatInterval, self.Id)
 	}
 
 	return nil
@@ -193,7 +193,7 @@ func (self *ClusterServer) handleHeartbeatError(err error) {
 	if self.Backoff > self.MaxBackoff {
 		self.Backoff = self.MaxBackoff
 	}
-	<-time.After(self.Backoff)
+	time.Sleep(self.Backoff)
 }
 
 // in the coordinator test we don't want to create protobuf servers,

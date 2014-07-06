@@ -1,8 +1,10 @@
 package http
 
 import (
+	"bytes"
 	"cluster"
 	. "common"
+	"compress/gzip"
 	"coordinator"
 	"crypto/tls"
 	"encoding/base64"
@@ -52,8 +54,13 @@ func NewHttpServer(httpPort string, readTimeout time.Duration, adminAssetsDir st
 }
 
 const (
-	INVALID_CREDENTIALS_MSG = "Invalid database/username/password"
+	INVALID_CREDENTIALS_MSG  = "Invalid database/username/password"
+	JSON_PRETTY_PRINT_INDENT = "    "
 )
+
+func isPretty(r *libhttp.Request) bool {
+	return r.URL.Query().Get("pretty") == "true"
+}
 
 func (self *HttpServer) EnableSsl(addr, certPath string) {
 	if addr == "" || certPath == "" {
@@ -83,7 +90,7 @@ func (self *HttpServer) registerEndpoint(p *pat.PatternServeMux, method string, 
 	version := self.clusterConfig.GetLocalConfiguration().Version
 	switch method {
 	case "get":
-		p.Get(pattern, HeaderHandler(f, version))
+		p.Get(pattern, CompressionHeaderHandler(f, version))
 	case "post":
 		p.Post(pattern, HeaderHandler(f, version))
 	case "del":
@@ -140,6 +147,7 @@ func (self *HttpServer) Serve(listener net.Listener) {
 
 	// cluster config endpoints
 	self.registerEndpoint(p, "get", "/cluster/servers", self.listServers)
+	self.registerEndpoint(p, "del", "/cluster/servers/:id", self.removeServers)
 	self.registerEndpoint(p, "post", "/cluster/shards", self.createShard)
 	self.registerEndpoint(p, "get", "/cluster/shards", self.getShards)
 	self.registerEndpoint(p, "del", "/cluster/shards/:id", self.dropShard)
@@ -210,6 +218,7 @@ type AllPointsWriter struct {
 	memSeries map[string]*protocol.Series
 	w         libhttp.ResponseWriter
 	precision TimePrecision
+	pretty    bool
 }
 
 func (self *AllPointsWriter) yield(series *protocol.Series) error {
@@ -224,7 +233,7 @@ func (self *AllPointsWriter) yield(series *protocol.Series) error {
 }
 
 func (self *AllPointsWriter) done() {
-	data, err := serializeMultipleSeries(self.memSeries, self.precision)
+	data, err := serializeMultipleSeries(self.memSeries, self.precision, self.pretty)
 	if err != nil {
 		self.w.WriteHeader(libhttp.StatusInternalServerError)
 		self.w.Write([]byte(err.Error()))
@@ -239,10 +248,11 @@ type ChunkWriter struct {
 	w                libhttp.ResponseWriter
 	precision        TimePrecision
 	wroteContentType bool
+	pretty           bool
 }
 
 func (self *ChunkWriter) yield(series *protocol.Series) error {
-	data, err := serializeSingleSeries(series, self.precision)
+	data, err := serializeSingleSeries(series, self.precision, self.pretty)
 	if err != nil {
 		return err
 	}
@@ -264,6 +274,9 @@ func TimePrecisionFromString(s string) (TimePrecision, error) {
 	case "u":
 		return MicrosecondPrecision, nil
 	case "m":
+		log.Warn("time_precision=m will be disabled in future release, use time_precision=ms instead")
+		fallthrough
+	case "ms":
 		return MillisecondPrecision, nil
 	case "s":
 		return SecondPrecision, nil
@@ -288,6 +301,7 @@ func (self *HttpServer) sendCrossOriginHeader(w libhttp.ResponseWriter, r *libht
 func (self *HttpServer) query(w libhttp.ResponseWriter, r *libhttp.Request) {
 	query := r.URL.Query().Get("q")
 	db := r.URL.Query().Get(":db")
+	pretty := isPretty(r)
 
 	self.tryAsDbUserAndClusterAdmin(w, r, func(user User) (int, interface{}) {
 
@@ -298,9 +312,9 @@ func (self *HttpServer) query(w libhttp.ResponseWriter, r *libhttp.Request) {
 
 		var writer Writer
 		if r.URL.Query().Get("chunked") == "true" {
-			writer = &ChunkWriter{w, precision, false}
+			writer = &ChunkWriter{w, precision, false, pretty}
 		} else {
-			writer = &AllPointsWriter{map[string]*protocol.Series{}, w, precision}
+			writer = &AllPointsWriter{map[string]*protocol.Series{}, w, precision, pretty}
 		}
 		seriesWriter := NewSeriesWriter(writer.yield)
 		err = self.coordinator.RunQuery(user, db, query, seriesWriter)
@@ -339,12 +353,26 @@ func (self *HttpServer) writePoints(w libhttp.ResponseWriter, r *libhttp.Request
 	}
 
 	self.tryAsDbUserAndClusterAdmin(w, r, func(user User) (int, interface{}) {
-		series, err := ioutil.ReadAll(r.Body)
+		reader := r.Body
+		encoding := r.Header.Get("Content-Encoding")
+		switch encoding {
+		case "gzip":
+			reader, err = gzip.NewReader(r.Body)
+			if err != nil {
+				return libhttp.StatusInternalServerError, err.Error()
+			}
+		default:
+			// assume it's plain text
+		}
+
+		series, err := ioutil.ReadAll(reader)
 		if err != nil {
 			return libhttp.StatusInternalServerError, err.Error()
 		}
+		decoder := json.NewDecoder(bytes.NewBuffer(series))
+		decoder.UseNumber()
 		serializedSeries := []*SerializedSeries{}
-		err = json.Unmarshal(series, &serializedSeries)
+		err = decoder.Decode(&serializedSeries)
 		if err != nil {
 			return libhttp.StatusBadRequest, err.Error()
 		}
@@ -443,18 +471,26 @@ type Point struct {
 	Values         []interface{} `json:"values"`
 }
 
-func serializeSingleSeries(series *protocol.Series, precision TimePrecision) ([]byte, error) {
+func serializeSingleSeries(series *protocol.Series, precision TimePrecision, pretty bool) ([]byte, error) {
 	arg := map[string]*protocol.Series{"": series}
-	return json.Marshal(SerializeSeries(arg, precision)[0])
+	if pretty {
+		return json.MarshalIndent(SerializeSeries(arg, precision)[0], "", JSON_PRETTY_PRINT_INDENT)
+	} else {
+		return json.Marshal(SerializeSeries(arg, precision)[0])
+	}
 }
 
-func serializeMultipleSeries(series map[string]*protocol.Series, precision TimePrecision) ([]byte, error) {
-	return json.Marshal(SerializeSeries(series, precision))
+func serializeMultipleSeries(series map[string]*protocol.Series, precision TimePrecision, pretty bool) ([]byte, error) {
+	if pretty {
+		return json.MarshalIndent(SerializeSeries(series, precision), "", JSON_PRETTY_PRINT_INDENT)
+	} else {
+		return json.Marshal(SerializeSeries(series, precision))
+	}
 }
 
 // // cluster admins management interface
 
-func toBytes(body interface{}) ([]byte, string, error) {
+func toBytes(body interface{}, pretty bool) ([]byte, string, error) {
 	if body == nil {
 		return nil, "text/plain", nil
 	}
@@ -464,14 +500,21 @@ func toBytes(body interface{}) ([]byte, string, error) {
 	case []byte:
 		return x, "text/plain", nil
 	default:
-		body, err := json.Marshal(body)
-		return body, "application/json", err
+		// only JSON output is prettied up.
+		var b []byte
+		var e error
+		if pretty {
+			b, e = json.MarshalIndent(body, "", JSON_PRETTY_PRINT_INDENT)
+		} else {
+			b, e = json.Marshal(body)
+		}
+		return b, "application/json", e
 	}
 }
 
-func yieldUser(user User, yield func(User) (int, interface{})) (int, string, []byte) {
+func yieldUser(user User, yield func(User) (int, interface{}), pretty bool) (int, string, []byte) {
 	statusCode, body := yield(user)
-	bodyContent, contentType, err := toBytes(body)
+	bodyContent, contentType, err := toBytes(body, pretty)
 	if err != nil {
 		return libhttp.StatusInternalServerError, "text/plain", []byte(err.Error())
 	}
@@ -532,7 +575,7 @@ func (self *HttpServer) tryAsClusterAdmin(w libhttp.ResponseWriter, r *libhttp.R
 		w.Write([]byte(err.Error()))
 		return
 	}
-	statusCode, contentType, body := yieldUser(user, yield)
+	statusCode, contentType, body := yieldUser(user, yield, isPretty(r))
 	if statusCode < 0 {
 		return
 	}
@@ -685,7 +728,7 @@ func (self *HttpServer) tryAsDbUser(w libhttp.ResponseWriter, r *libhttp.Request
 		return libhttp.StatusUnauthorized, []byte(err.Error())
 	}
 
-	statusCode, contentType, v := yieldUser(user, yield)
+	statusCode, contentType, v := yieldUser(user, yield, isPretty(r))
 	if statusCode == libhttp.StatusUnauthorized {
 		w.Header().Add("WWW-Authenticate", "Basic realm=\"influxdb\"")
 	}
@@ -883,7 +926,7 @@ func (self *HttpServer) listInterfaces(w libhttp.ResponseWriter, r *libhttp.Requ
 			}
 		}
 		return libhttp.StatusOK, directories
-	})
+	}, isPretty(r))
 
 	w.Header().Add("content-type", contentType)
 	w.WriteHeader(statusCode)
@@ -951,6 +994,21 @@ func (self *HttpServer) listServers(w libhttp.ResponseWriter, r *libhttp.Request
 			serverMaps[i] = map[string]interface{}{"id": s.Id, "protobufConnectString": s.ProtobufConnectionString}
 		}
 		return libhttp.StatusOK, serverMaps
+	})
+}
+
+func (self *HttpServer) removeServers(w libhttp.ResponseWriter, r *libhttp.Request) {
+	self.tryAsClusterAdmin(w, r, func(u User) (int, interface{}) {
+		id, err := strconv.ParseInt(r.URL.Query().Get(":id"), 10, 32)
+		if err != nil {
+			return errorToStatusCode(err), err.Error()
+		}
+
+		err = self.raftServer.RemoveServer(uint32(id))
+		if err != nil {
+			return errorToStatusCode(err), err.Error()
+		}
+		return libhttp.StatusOK, nil
 	})
 }
 
