@@ -383,13 +383,22 @@ func (c *DropShardCommand) Apply(server raft.Server) (interface{}, error) {
 	return nil, err
 }
 
+type Series struct {
+	Name     string
+	Fields   []string
+	FieldIds []uint64
+}
 type CreateSeriesFieldIdsCommand struct {
 	Database string
-	Series   []*protocol.Series
+	Series   []*Series
 }
 
 func NewCreateSeriesFieldIdsCommand(database string, series []*protocol.Series) *CreateSeriesFieldIdsCommand {
-	return &CreateSeriesFieldIdsCommand{Database: database, Series: series}
+	ser := make([]*Series, len(series), len(series))
+	for i, s := range series {
+		ser[i] = &Series{Name: *s.Name, Fields: s.Fields}
+	}
+	return &CreateSeriesFieldIdsCommand{Database: database, Series: ser}
 }
 
 func (c *CreateSeriesFieldIdsCommand) CommandName() string {
@@ -410,7 +419,17 @@ func (c *CreateSeriesFieldIdsCommand) Decode(r io.Reader) error {
 
 func (c *CreateSeriesFieldIdsCommand) Apply(server raft.Server) (interface{}, error) {
 	config := server.Context().(*cluster.ClusterConfiguration)
-	err := config.Metastore.GetOrSetFieldIds(c.Database, c.Series)
+	series := make([]*protocol.Series, len(c.Series), len(c.Series))
+	for i, s := range c.Series {
+		name := s.Name
+		fields := s.Fields
+		series[i] = &protocol.Series{Name: &name, Fields: fields}
+	}
+	err := config.Metastore.GetOrSetFieldIds(c.Database, series)
+	for i, s := range series {
+		fieldIds := s.FieldIds
+		c.Series[i].FieldIds = fieldIds
+	}
 	return c.Series, err
 }
 

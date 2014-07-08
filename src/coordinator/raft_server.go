@@ -733,17 +733,64 @@ func (self *RaftServer) GetOrSetFieldIdsForSeries(database string, series []*pro
 		return nil, err
 	}
 	if x, k := result.([]byte); k {
-		s := []*protocol.Series{}
+		s := []*Series{}
 		err := json.Unmarshal(x, &s)
 		if err != nil {
 			return nil, err
 		}
-		return s, nil
+		if len(series) != len(s) {
+			fmt.Println("!!!!! marshal byte lengths not equal! ", len(series), len(s))
+			self.printDifference(series, self.convertSeriesToProto(s))
+		}
+		return self.convertSeriesToProto(s), nil
 	}
-	if x, k := result.([]*protocol.Series); k {
-		return x, nil
+	if x, k := result.([]*Series); k {
+		if len(series) != len(x) {
+			fmt.Println("!!!!! marshal from local lengths not equal! ", len(series), len(x))
+			self.printDifference(series, self.convertSeriesToProto(x))
+		}
+		return self.convertSeriesToProto(x), nil
 	}
 	return nil, nil
+}
+
+func (self *RaftServer) convertSeriesToProto(series []*Series) []*protocol.Series {
+	ser := make([]*protocol.Series, len(series), len(series))
+	for i, s := range series {
+		name := s.Name
+		fields := s.Fields
+		fieldIds := s.FieldIds
+		ser[i] = &protocol.Series{Name: &name, Fields: fields, FieldIds: fieldIds}
+	}
+	return ser
+}
+
+func (self *RaftServer) printDifference(original, marshaled []*protocol.Series) {
+	for _, so := range original {
+		hasField := false
+		for _, sm := range marshaled {
+			if *so.Name == *sm.Name {
+				hasField = true
+				break
+			}
+		}
+		if !hasField {
+			fmt.Println("ORIGINAL SERIES NOT IN MARSHAL: ", *so.Name)
+		}
+	}
+
+	for _, sm := range marshaled {
+		hasField := false
+		for _, so := range original {
+			if *sm.Name == *so.Name {
+				hasField = true
+				break
+			}
+		}
+		if !hasField {
+			fmt.Println("MARSHAL SERIES NOT IN ORIGINAL: ", *sm.Name)
+		}
+	}
 }
 
 func (self *RaftServer) DropSeries(database, series string) error {

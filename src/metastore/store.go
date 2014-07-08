@@ -3,7 +3,9 @@ package metastore
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"regexp"
+	"runtime/debug"
 	"sync"
 
 	"protocol"
@@ -72,6 +74,7 @@ func (self *Store) ReplaceFieldNamesWithFieldIds(database string, series []*prot
 	if err != nil {
 		return err
 	}
+
 	self.fillCache(database, seriesWithFieldIds)
 	for i, s := range series {
 		s.Fields = nil
@@ -82,7 +85,13 @@ func (self *Store) ReplaceFieldNamesWithFieldIds(database string, series []*prot
 
 func (self *Store) GetOrSetFieldIds(database string, series []*protocol.Series) error {
 	self.fieldsLock.Lock()
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("ARG!", debug.Stack())
+		}
+	}()
 	defer self.fieldsLock.Unlock()
+	origLen := len(series)
 	databaseSeries := self.StringsToIds[database]
 	if databaseSeries == nil {
 		databaseSeries = make(map[string]map[string]uint64)
@@ -105,6 +114,9 @@ func (self *Store) GetOrSetFieldIds(database string, series []*protocol.Series) 
 			fieldIds[i] = fieldId
 		}
 		s.FieldIds = fieldIds
+	}
+	if origLen != len(series) {
+		fmt.Println("LE FUCK!", origLen, len(series))
 	}
 	return nil
 }
