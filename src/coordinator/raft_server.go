@@ -17,6 +17,7 @@ import (
 	"parser"
 	"path/filepath"
 	"protocol"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -684,9 +685,14 @@ func (s *RaftServer) processCommandHandler(w http.ResponseWriter, req *http.Requ
 	vars := mux.Vars(req)
 	value := vars["command_type"]
 	command := internalRaftCommands[value]
+	v := reflect.New(reflect.Indirect(reflect.ValueOf(command)).Type()).Interface()
+	copy, ok := v.(raft.Command)
+	if !ok {
+		panic(fmt.Sprintf("raft: Unable to copy command: %s (%v)", command.CommandName(), reflect.ValueOf(v).Kind().String()))
+	}
 
-	if result, err := s.marshalAndDoCommandFromBody(command, req); err != nil {
-		log.Error("command %T failed: %s", command, err)
+	if result, err := s.marshalAndDoCommandFromBody(copy, req); err != nil {
+		log.Error("command %T failed: %s", copy, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	} else {
 		if result != nil {
