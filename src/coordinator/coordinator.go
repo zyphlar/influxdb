@@ -176,7 +176,7 @@ func (self *CoordinatorImpl) runListSeriesQuery(querySpec *parser.QuerySpec, ser
 
 	for i, s := range series {
 		seriesName := s
-		fieldValues := []*protocol.FieldValue{&protocol.FieldValue{StringValue: &seriesName}}
+		fieldValues := []*protocol.FieldValue{{StringValue: &seriesName}}
 		points[i] = &protocol.Point{Values: fieldValues}
 	}
 

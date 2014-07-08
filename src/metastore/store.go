@@ -129,7 +129,7 @@ func (self *Store) GetSeriesForDatabaseAndRegex(database string, regex *regexp.R
 		return nil
 	}
 	matchingSeries := make([]string, 0)
-	for series, _ := range databaseSeries {
+	for series := range databaseSeries {
 		if regex.MatchString(series) {
 			matchingSeries = append(matchingSeries, series)
 		}
@@ -145,7 +145,7 @@ func (self *Store) GetSeriesForDatabase(database string) []string {
 		return nil
 	}
 	series := make([]string, len(databaseSeries))
-	for s, _ := range databaseSeries {
+	for s := range databaseSeries {
 		series = append(series, s)
 	}
 	return series
