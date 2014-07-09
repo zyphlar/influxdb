@@ -220,8 +220,8 @@ func (self *Store) fillCache(database string, series []*protocol.Series) {
 }
 
 func (self *Store) setFieldIdsFromCache(database string, series []*protocol.Series) bool {
-	self.fieldsLock.Lock()
-	defer self.fieldsLock.Unlock()
+	self.fieldsLock.RLock()
+	defer self.fieldsLock.RUnlock()
 	databaseSeries := self.StringsToIds[database]
 	for _, s := range series {
 		seriesFields, ok := databaseSeries[*s.Name]
