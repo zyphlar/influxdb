@@ -75,7 +75,6 @@ func (self *Store) ReplaceFieldNamesWithFieldIds(database string, series []*prot
 		return err
 	}
 
-	self.fillCache(database, seriesWithFieldIds)
 	for i, s := range series {
 		s.Fields = nil
 		s.FieldIds = seriesWithFieldIds[i].FieldIds
