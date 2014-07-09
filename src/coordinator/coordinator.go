@@ -358,7 +358,7 @@ func (self *CoordinatorImpl) readFromResponseChannels(processor cluster.QueryPro
 			if processor != nil {
 				// if the data wasn't aggregated at the shard level, aggregate
 				// the data here
-				log.Debug("YIELDING: %d points with %d columns", len(response.Series.Points), len(response.Series.Fields))
+				log.Debug("YIELDING: %d points with %d columns for %s", len(response.Series.Points), len(response.Series.Fields), response.Series.GetName())
 				processor.YieldSeries(response.Series)
 				continue
 			}
