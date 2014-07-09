@@ -238,9 +238,9 @@ func (c *InfluxJoinCommand) Apply(server raft.Server) (interface{}, error) {
 	clusterConfig := server.Context().(*cluster.ClusterConfiguration)
 
 	newServer := clusterConfig.GetServerByRaftName(c.Name)
-	// it's a new server the cluster has never seen, make it a potential
+	// The other servers already know about this one. Must be a recovery. Let it rejoin.
 	if newServer != nil {
-		return nil, fmt.Errorf("Server %s already exist", c.Name)
+		return nil, nil
 	}
 
 	log.Info("Adding new server to the cluster config %s", c.Name)
