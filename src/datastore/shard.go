@@ -446,7 +446,7 @@ func (self *Shard) getFieldsForSeriesDEPRECATED(db, series string, columns []str
 		columns = self.getColumnNamesForSeriesDEPRECATED(db, series)
 	}
 	if len(columns) == 0 {
-		return nil, FieldLookupError{"Coulnd't look up columns for series: " + series}
+		return nil, FieldLookupError{"Couldn't look up columns for series: " + series}
 	}
 
 	fields := make([]*metastore.Field, len(columns), len(columns))
@@ -656,7 +656,7 @@ func (self *Shard) convertUintTimestampToInt64(t *uint64) int64 {
 func (self *Shard) getFieldsForSeries(db, series string, columns []string) ([]*metastore.Field, error) {
 	allFields := self.metaStore.GetFieldsForSeries(db, series)
 	if len(allFields) == 0 {
-		return nil, FieldLookupError{"Coulnd't look up columns for series: " + series}
+		return nil, FieldLookupError{"Couldn't look up columns for series: " + series}
 	}
 	if len(columns) > 0 && columns[0] == "*" {
 		return allFields, nil
