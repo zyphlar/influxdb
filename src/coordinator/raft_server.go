@@ -752,34 +752,6 @@ func (self *RaftServer) GetOrSetFieldIdsForSeries(database string, series []*pro
 	return nil, nil
 }
 
-func (self *RaftServer) printDifference(original, marshaled []*protocol.Series) {
-	for _, so := range original {
-		hasField := false
-		for _, sm := range marshaled {
-			if *so.Name == *sm.Name {
-				hasField = true
-				break
-			}
-		}
-		if !hasField {
-			fmt.Println("ORIGINAL SERIES NOT IN MARSHAL: ", *so.Name)
-		}
-	}
-
-	for _, sm := range marshaled {
-		hasField := false
-		for _, so := range original {
-			if *sm.Name == *so.Name {
-				hasField = true
-				break
-			}
-		}
-		if !hasField {
-			fmt.Println("MARSHAL SERIES NOT IN ORIGINAL: ", *sm.Name)
-		}
-	}
-}
-
 func (self *RaftServer) DropSeries(database, series string) error {
 	command := NewDropSeriesCommand(database, series)
 	_, err := self.doOrProxyCommand(command)
