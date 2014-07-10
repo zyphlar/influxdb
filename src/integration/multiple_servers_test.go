@@ -418,8 +418,8 @@ func (self *ServerSuite) TestDropDatabase(c *C) {
 	}
 	for _, s := range self.serverProcesses {
 		fmt.Printf("Running query against: %d\n", s.ApiPort())
-		collection := s.Query("drop_db", "select * from cluster_query", true, c)
-		c.Assert(collection.Members, HasLen, 0)
+		error, _ := s.GetErrorBody("drop_db", "select * from cluster_query", "paul", "pass", true, c)
+		c.Assert(error, Matches, ".*Couldn't look up column.*")
 	}
 }
 
@@ -465,8 +465,8 @@ func (self *ServerSuite) TestDropSeries(c *C) {
 
 		for _, s := range self.serverProcesses {
 			fmt.Printf("Running query against: %d\n", s.ApiPort())
-			collection := s.Query("drop_series", "select * from cluster_query.1", true, c)
-			c.Assert(collection.Members, HasLen, 0)
+			error, _ := s.GetErrorBody("drop_series", "select * from cluster_query.1", "paul", "pass", true, c)
+			c.Assert(error, Matches, ".*Couldn't look up.*")
 		}
 	}
 }

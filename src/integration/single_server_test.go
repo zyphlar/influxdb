@@ -265,20 +265,25 @@ func (self *SingleServerSuite) TestUserWritePermissions(c *C) {
 	c.Assert(json.Unmarshal([]byte(data), &series), IsNil)
 	// readUser shouldn't be able to write
 	c.Assert(user.WriteSeries(series), NotNil)
-	content := self.server.RunQueryAsRoot("select * from test_should_write", "m", c)
-	c.Assert(content, HasLen, 0)
+	actualSeries, err := rootUser.Query("select * from test_should_write", "s")
+	// if this test ran by itself there will be no shards to query,
+	// therefore no error will be returned
+	if err != nil {
+		c.Assert(err, ErrorMatches, ".*Couldn't look up.*")
+	} else {
+		c.Assert(actualSeries, HasLen, 0)
+	}
 	rootUser.ChangeDatabaseUser("db1", "limited_user", "pass", false, "^$", "test_should_write")
 	// write the data to test the write permissions
 	c.Assert(user.WriteSeries(series), IsNil)
-	self.server.WaitForServerToSync()
-	invalidSeries := []*influxdb.Series{}
-	content = self.server.RunQueryAsRoot("select * from test_should_write", "m", c)
+	content := self.server.RunQueryAsRoot("select * from test_should_write", "m", c)
 	c.Assert(content, HasLen, 1)
+	invalidSeries := []*influxdb.Series{}
 	c.Assert(json.Unmarshal([]byte(invalidData), &invalidSeries), IsNil)
 	c.Assert(user.WriteSeries(invalidSeries), NotNil)
 	self.server.WaitForServerToSync()
-	content = self.server.RunQueryAsRoot("select * from test_should_not_write", "m", c)
-	c.Assert(content, HasLen, 0)
+	_, err = rootUser.Query("select * from test_should_not_write", "m")
+	c.Assert(err, ErrorMatches, ".*Couldn't look up.*")
 	rootUser.ChangeDatabaseUser("db1", "limited_user", "pass", false, "^$", "test_.*")
 	c.Assert(user.WriteSeries(invalidSeries), IsNil)
 	self.server.WaitForServerToSync()
@@ -426,8 +431,8 @@ func (self *SingleServerSuite) TestDataResurrectionAfterRestart(c *C) {
 	self.server.Stop()
 	c.Assert(self.server.Start(), IsNil)
 	self.server.WaitForServerToStart()
-	series = self.server.RunQuery("select count(column0) from data_resurrection", "s", c)
-	c.Assert(series, HasLen, 0)
+	error, _ := self.server.GetErrorBody("db1", "select count(column0) from data_resurrection", "user", "pass", true, c)
+	c.Assert(error, Matches, ".*Couldn't look up.*")
 	series = self.server.RunQuery("list series", "s", c)
 	c.Assert(series, HasLen, 1)
 	c.Assert(series[0].Points, HasLen, 0)
@@ -548,8 +553,8 @@ func (self *SingleServerSuite) TestDbDelete(c *C) {
 
 	self.createUser(c)
 	// this shouldn't return any data
-	data = self.server.RunQuery("select val1 from test_deletetions", "m", c)
-	c.Assert(data, HasLen, 0)
+	error, _ := self.server.GetErrorBody("db1", "select val1 from test_deletetions", "root", "root", true, c)
+	c.Assert(error, Matches, ".*Couldn't look up.*")
 }
 
 // test delete query
