@@ -146,9 +146,7 @@ func (self *Store) GetSeriesForDatabase(database string) []string {
 	return series
 }
 
-func (self *Store) GetFieldsForDatabase(database string) []*Field {
-	self.fieldsLock.RLock()
-	defer self.fieldsLock.RUnlock()
+func (self *Store) getFieldsForDatabase(database string) []*Field {
 	fields := make([]*Field, 0)
 	databaseSeries, ok := self.StringsToIds[database]
 	if !ok {
@@ -162,9 +160,13 @@ func (self *Store) GetFieldsForDatabase(database string) []*Field {
 	return fields
 }
 
-func (self *Store) GetFieldsForSeries(database, series string) []*Field {
+func (self *Store) GetFieldsForDatabase(database string) []*Field {
 	self.fieldsLock.RLock()
 	defer self.fieldsLock.RUnlock()
+	return self.getFieldsForDatabase(database)
+}
+
+func (self *Store) getFieldsForSeries(database, series string) []*Field {
 	databaseSeries, ok := self.StringsToIds[database]
 	if !ok {
 		return nil
@@ -177,21 +179,29 @@ func (self *Store) GetFieldsForSeries(database, series string) []*Field {
 	return fields
 }
 
-func (self *Store) DropSeries(database, series string) error {
+func (self *Store) GetFieldsForSeries(database, series string) []*Field {
+	self.fieldsLock.RLock()
+	defer self.fieldsLock.RUnlock()
+	return self.getFieldsForSeries(database, series)
+}
+
+func (self *Store) DropSeries(database, series string) ([]*Field, error) {
 	self.fieldsLock.Lock()
 	defer self.fieldsLock.Unlock()
+	fields := self.getFieldsForSeries(database, series)
 	databaseSeries := self.StringsToIds[database]
 	if databaseSeries != nil {
 		delete(databaseSeries, series)
 	}
-	return nil
+	return fields, nil
 }
 
-func (self *Store) DropDatabase(database string) error {
+func (self *Store) DropDatabase(database string) ([]*Field, error) {
 	self.fieldsLock.Lock()
 	defer self.fieldsLock.Unlock()
+	fields := self.getFieldsForDatabase(database)
 	delete(self.StringsToIds, database)
-	return nil
+	return fields, nil
 }
 
 func (self *Store) setFieldIdsFromCache(database string, series []*protocol.Series) bool {
