@@ -1552,15 +1552,16 @@ func (self *DataTestSuite) SinglePointSelectWithNullValues(c *C) (Fun, Fun) {
 
 			query := "select * from test_single_points_with_nulls where name='john';"
 			data := client.RunQuery(query, c, "u")
-			c.Assert(data[0].Points, HasLen, 1)
+			c.Assert(data, HasLen, 1)
+			maps := ToMap(data[0])
 
-			for _, point := range data[0].Points {
-				query := fmt.Sprintf("select * from test_single_points_with_nulls where time = %.0fu and sequence_number = %0.f;", point[0].(float64), point[1])
+			for _, m := range maps {
+				query := fmt.Sprintf("select * from test_single_points_with_nulls where time = %.0fu and sequence_number = %0.f;", m["time"].(float64), m["sequence_number"].(float64))
 				data := client.RunQuery(query, c, "u")
 				c.Assert(data, HasLen, 1)
-				c.Assert(data[0].Points, HasLen, 1)
-				c.Assert(data[0].Points[0], HasLen, 3)
-				c.Assert(data[0].Points[0][2], Equals, point[3])
+				actualMaps := ToMap(data[0])
+				c.Assert(actualMaps, HasLen, 1)
+				c.Assert(actualMaps[0]["name"], Equals, maps[0]["name"])
 			}
 		}
 }
