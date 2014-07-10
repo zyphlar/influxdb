@@ -168,6 +168,10 @@ func (self *ServerSuite) TestRestartAfterCompaction(c *C) {
 	self.serverProcesses[0].Start()
 	self.serverProcesses[0].WaitForServerToStart()
 
+	for _, s := range self.serverProcesses {
+		s.WaitForServerToSync()
+	}
+
 	collection = self.serverProcesses[0].Query("test_rep", "select * from test_restart_after_compaction", false, c)
 	c.Assert(collection.Members, HasLen, 1)
 	series = collection.GetSeries("test_restart_after_compaction", c)
@@ -436,7 +440,9 @@ func (self *ServerSuite) TestDropSeries(c *C) {
 		"points": [[1]]
 		}]`
 		self.serverProcesses[0].Post("/db/drop_series/series?u=paul&p=pass", data, c)
-		self.serverProcesses[0].WaitForServerToSync()
+		for _, s := range self.serverProcesses {
+			s.WaitForServerToSync()
+		}
 		for _, s := range self.serverProcesses {
 			fmt.Printf("Running query against: %d\n", s.ApiPort())
 			collection := s.Query("drop_series", "select * from cluster_query.1", true, c)
@@ -514,7 +520,9 @@ func (self *ServerSuite) TestFailureAndReplicationReplays(c *C) {
   }]`
 	self.serverProcesses[0].Post("/db/full_rep/series?u=paul&p=pass", data, c)
 
-	self.serverProcesses[0].WaitForServerToSync()
+	for _, s := range self.serverProcesses {
+		s.WaitForServerToSync()
+	}
 
 	for _, s := range self.serverProcesses {
 		collection := s.Query("full_rep", "select sum(val) from test_failure_replays;", true, c)
