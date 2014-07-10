@@ -50,12 +50,13 @@ func (self *Shard) Write(database string, series []*protocol.Series) error {
 
 		count := 0
 		for fieldIndex, id := range s.FieldIds {
-			keyBuffer := bytes.NewBuffer(make([]byte, 0, 24))
-			dataBuffer := proto.NewBuffer(nil)
 			for _, point := range s.Points {
+				// keyBuffer and dataBuffer have to be recreated since we are
+				// batching the writes, otherwise new writes will override the
+				// old writes that are still in memory
+				keyBuffer := bytes.NewBuffer(make([]byte, 0, 24))
+				dataBuffer := proto.NewBuffer(nil)
 				var err error
-				keyBuffer.Reset()
-				dataBuffer.Reset()
 
 				binary.Write(keyBuffer, binary.BigEndian, &id)
 				timestamp := self.convertTimestampToUint(point.GetTimestampInMicroseconds())
