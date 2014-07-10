@@ -138,15 +138,8 @@ func (self *Shard) executeQueryForSeries(querySpec *parser.QuerySpec, seriesName
 
 	fields, err := self.getFieldsForSeries(querySpec.Database(), seriesName, columns)
 	if err != nil {
-		// because a db is distributed across the cluster, it's possible we don't have the series indexed here. ignore
-		switch err := err.(type) {
-		case FieldLookupError:
-			log.Debug("Cannot find fields %v", columns)
-			return nil
-		default:
-			log.Error("Error looking up fields for %s: %s", seriesName, err)
-			return fmt.Errorf("Error looking up fields for %s: %s", seriesName, err)
-		}
+		log.Error("Error looking up fields for %s: %s", seriesName, err)
+		return err
 	}
 
 	fieldCount := len(fields)
