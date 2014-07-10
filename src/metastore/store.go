@@ -194,26 +194,6 @@ func (self *Store) DropDatabase(database string) error {
 	return nil
 }
 
-func (self *Store) fillCache(database string, series []*protocol.Series) {
-	self.fieldsLock.Lock()
-	defer self.fieldsLock.Unlock()
-	databaseSeries, ok := self.StringsToIds[database]
-	if !ok {
-		databaseSeries = make(map[string]map[string]uint64)
-		self.StringsToIds[database] = databaseSeries
-	}
-	for _, s := range series {
-		seriesFields, ok := databaseSeries[*s.Name]
-		if !ok {
-			seriesFields = make(map[string]uint64)
-			databaseSeries[*s.Name] = seriesFields
-		}
-		for i, f := range s.Fields {
-			seriesFields[f] = s.FieldIds[i]
-		}
-	}
-}
-
 func (self *Store) setFieldIdsFromCache(database string, series []*protocol.Series) bool {
 	self.fieldsLock.RLock()
 	defer self.fieldsLock.RUnlock()
