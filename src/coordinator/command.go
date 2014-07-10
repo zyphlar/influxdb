@@ -410,7 +410,7 @@ func (c *CreateSeriesFieldIdsCommand) Decode(r io.Reader) error {
 
 func (c *CreateSeriesFieldIdsCommand) Apply(server raft.Server) (interface{}, error) {
 	config := server.Context().(*cluster.ClusterConfiguration)
-	err := config.Metastore.GetOrSetFieldIds(c.Database, c.Series)
+	err := config.MetaStore.GetOrSetFieldIds(c.Database, c.Series)
 	return c.Series, err
 }
 

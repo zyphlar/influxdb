@@ -86,7 +86,7 @@ type ClusterConfiguration struct {
 	shardsByIdLock             sync.RWMutex
 	LocalRaftName              string
 	writeBuffers               []*WriteBuffer
-	Metastore                  *metastore.Store
+	MetaStore                  *metastore.Store
 }
 
 type ContinuousQuery struct {
@@ -120,7 +120,7 @@ func NewClusterConfiguration(
 		shortTermShards:            make([]*ShardData, 0),
 		random:                     rand.New(rand.NewSource(time.Now().UnixNano())),
 		shardsById:                 make(map[uint32]*ShardData, 0),
-		Metastore:                  metaStore,
+		MetaStore:                  metaStore,
 	}
 }
 
@@ -334,8 +334,8 @@ func (self *ClusterConfiguration) DropDatabase(name string) error {
 
 	delete(self.dbUsers, name)
 
-	fields := self.Metastore.GetFieldsForDatabase(name)
-	self.Metastore.DropDatabase(name)
+	fields := self.MetaStore.GetFieldsForDatabase(name)
+	self.MetaStore.DropDatabase(name)
 	go func() {
 		shards := self.GetAllShards()
 		for _, s := range shards {
@@ -527,7 +527,7 @@ type SavedConfiguration struct {
 	ShortTermShards   []*NewShardData
 	LongTermShards    []*NewShardData
 	ContinuousQueries map[string][]*ContinuousQuery
-	Metastore         *metastore.Store
+	MetaStore         *metastore.Store
 	LastShardIdUsed   uint32
 }
 
@@ -542,8 +542,10 @@ func (self *ClusterConfiguration) Save() ([]byte, error) {
 		ShortTermShards:   self.convertShardsToNewShardData(self.shortTermShards),
 		LongTermShards:    self.convertShardsToNewShardData(self.longTermShards),
 		LastShardIdUsed:   self.lastShardIdUsed,
-		Metastore:         self.Metastore,
+		MetaStore:         self.MetaStore,
 	}
+
+	fmt.Printf("MetaStore on Save: %#v\n", self.MetaStore.StringsToIds)
 
 	for k := range self.DatabaseReplicationFactors {
 		data.Databases[k] = 0
@@ -598,6 +600,7 @@ func (self *ClusterConfiguration) Recovery(b []byte) error {
 		return err
 	}
 
+	fmt.Printf("MetaStore on Recovery: %#v\n", data.MetaStore.StringsToIds)
 	self.DatabaseReplicationFactors = make(map[string]struct{}, len(data.Databases))
 	for k := range data.Databases {
 		self.DatabaseReplicationFactors[k] = struct{}{}
@@ -605,7 +608,7 @@ func (self *ClusterConfiguration) Recovery(b []byte) error {
 	self.clusterAdmins = data.Admins
 	self.dbUsers = data.DbUsers
 	self.servers = data.Servers
-	self.Metastore = data.Metastore
+	self.MetaStore = data.MetaStore
 
 	for _, server := range self.servers {
 		log.Info("Checking whether %s is the local server %s", server.RaftName, self.LocalRaftName)
@@ -1049,11 +1052,11 @@ func (self *ClusterConfiguration) DropShard(shardId uint32, serverIds []uint32) 
 }
 
 func (self *ClusterConfiguration) DropSeries(database, series string) error {
-	fields := self.Metastore.GetFieldsForSeries(database, series)
+	fields := self.MetaStore.GetFieldsForSeries(database, series)
 	if fields == nil {
 		return fmt.Errorf("Couldn't lookup field ids for database %s and series %s", database, series)
 	}
-	err := self.Metastore.DropSeries(database, series)
+	err := self.MetaStore.DropSeries(database, series)
 	if err != nil {
 		return err
 	}
