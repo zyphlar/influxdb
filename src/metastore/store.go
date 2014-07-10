@@ -54,6 +54,12 @@ func (self *Store) ToJson() ([]byte, error) {
 	return json.Marshal(self)
 }
 
+func (self *Store) UpdateFromSnapshot(other *Store) {
+	clusterConsensus := self.clusterConsensus
+	*self = *other
+	self.clusterConsensus = clusterConsensus
+}
+
 func (self *Store) SetClusterConsensus(c ClusterConsensus) {
 	self.clusterConsensus = c
 }

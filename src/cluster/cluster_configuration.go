@@ -545,8 +545,6 @@ func (self *ClusterConfiguration) Save() ([]byte, error) {
 		MetaStore:         self.MetaStore,
 	}
 
-	fmt.Printf("MetaStore on Save: %#v\n", self.MetaStore.StringsToIds)
-
 	for k := range self.DatabaseReplicationFactors {
 		data.Databases[k] = 0
 	}
@@ -600,7 +598,6 @@ func (self *ClusterConfiguration) Recovery(b []byte) error {
 		return err
 	}
 
-	fmt.Printf("MetaStore on Recovery: %#v\n", data.MetaStore.StringsToIds)
 	self.DatabaseReplicationFactors = make(map[string]struct{}, len(data.Databases))
 	for k := range data.Databases {
 		self.DatabaseReplicationFactors[k] = struct{}{}
@@ -608,7 +605,7 @@ func (self *ClusterConfiguration) Recovery(b []byte) error {
 	self.clusterAdmins = data.Admins
 	self.dbUsers = data.DbUsers
 	self.servers = data.Servers
-	self.MetaStore = data.MetaStore
+	self.MetaStore.UpdateFromSnapshot(data.MetaStore)
 
 	for _, server := range self.servers {
 		log.Info("Checking whether %s is the local server %s", server.RaftName, self.LocalRaftName)
