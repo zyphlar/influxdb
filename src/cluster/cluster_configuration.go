@@ -14,6 +14,7 @@ import (
 	"metastore"
 	"parser"
 	"protocol"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -28,10 +29,10 @@ type QuerySpec interface {
 	GetEndTime() time.Time
 	Database() string
 	TableNames() []string
+	TableNamesAndRegex() ([]string, *regexp.Regexp)
 	GetGroupByInterval() *time.Duration
 	AllShardsQuery() bool
 	IsRegex() bool
-	ShouldQueryShortTermAndLongTerm() (shouldQueryShortTerm bool, shouldQueryLongTerm bool)
 }
 
 type WAL interface {
@@ -45,11 +46,12 @@ type WAL interface {
 type ShardCreator interface {
 	// the shard creator expects all shards to be of the same type (long term or short term) and have the same
 	// start and end times. This is called to create the shard set for a given duration.
-	CreateShards(shards []*NewShardData) ([]*ShardData, error)
+	CreateShards(spaceName string, shards []*NewShardData) ([]*ShardData, error)
+	CreateShardSpace(shardSpace *ShardSpace) error
 }
 
 const (
-	FIRST_LOWER_CASE_CHARACTER = uint8('a')
+	DEFAULT_SHARD_SPACE_NAME = "default"
 )
 
 /*
@@ -75,18 +77,21 @@ type ClusterConfiguration struct {
 	connectionCreator          func(string) ServerConnection
 	shardStore                 LocalShardStore
 	wal                        WAL
-	longTermShards             []*ShardData
-	shortTermShards            []*ShardData
 	lastShardIdUsed            uint32
 	random                     *rand.Rand
 	lastServerToGetShard       *ClusterServer
 	shardCreator               ShardCreator
-	shardLock                  sync.Mutex
+	shardLock                  sync.RWMutex
 	shardsById                 map[uint32]*ShardData
-	shardsByIdLock             sync.RWMutex
 	LocalRaftName              string
 	writeBuffers               []*WriteBuffer
 	MetaStore                  *metastore.Store
+	// these are all of the shard spaces
+	shardSpaces []*ShardSpace
+	// these are just the spaces organized by db and default to make write lookups faster
+	databaseShardSpaces map[string][]*ShardSpace
+	defaultShardSpaces  []*ShardSpace
+	shards              []*ShardData
 }
 
 type ContinuousQuery struct {
@@ -116,16 +121,30 @@ func NewClusterConfiguration(
 		connectionCreator:          connectionCreator,
 		shardStore:                 shardStore,
 		wal:                        wal,
-		longTermShards:             make([]*ShardData, 0),
-		shortTermShards:            make([]*ShardData, 0),
 		random:                     rand.New(rand.NewSource(time.Now().UnixNano())),
 		shardsById:                 make(map[uint32]*ShardData, 0),
 		MetaStore:                  metaStore,
+		shardSpaces:                make([]*ShardSpace, 0),
+		databaseShardSpaces:        make(map[string][]*ShardSpace),
+		defaultShardSpaces:         make([]*ShardSpace, 0),
+		shards:                     make([]*ShardData, 0),
 	}
 }
 
 func (self *ClusterConfiguration) SetShardCreator(shardCreator ShardCreator) {
 	self.shardCreator = shardCreator
+}
+
+func (self *ClusterConfiguration) GetShards() []*ShardData {
+	self.shardLock.RLock()
+	defer self.shardLock.RUnlock()
+	return self.shards
+}
+
+func (self *ClusterConfiguration) GetShardSpaces() []*ShardSpace {
+	self.shardLock.RLock()
+	defer self.shardLock.RUnlock()
+	return self.shardSpaces
 }
 
 // called by the server, this will wake up every 10 mintues to see if it should
@@ -136,23 +155,59 @@ func (self *ClusterConfiguration) CreateFutureShardsAutomaticallyBeforeTimeComes
 		for {
 			time.Sleep(time.Minute * 10)
 			log.Debug("Checking to see if future shards should be created")
-			self.automaticallyCreateFutureShard(self.shortTermShards, SHORT_TERM)
-			self.automaticallyCreateFutureShard(self.longTermShards, LONG_TERM)
+			self.shardLock.RLock()
+			spaces := make([]*ShardSpace, 0, len(self.shardSpaces))
+			copy(spaces, self.shardSpaces)
+			self.shardLock.RUnlock()
+			for _, s := range spaces {
+				self.automaticallyCreateFutureShard(s)
+			}
 		}
 	}()
 }
 
-func (self *ClusterConfiguration) automaticallyCreateFutureShard(shards []*ShardData, shardType ShardType) {
-	if len(shards) == 0 {
+func (self *ClusterConfiguration) PeriodicallyDropShardsWithRetentionPolicies() {
+	go func() {
+		for {
+			time.Sleep(self.config.StorageRetentionSweepPeriod.Duration)
+			log.Debug("Checking for shards to drop")
+			shards := self.getExpiredShards()
+			for _, s := range shards {
+				self.shardStore.DeleteShard(s.id)
+			}
+		}
+	}()
+}
+
+func (self *ClusterConfiguration) getExpiredShards() []*ShardData {
+	self.shardLock.RLock()
+	defer self.shardLock.RUnlock()
+	shards := make([]*ShardData, 0)
+	for _, space := range self.shardSpaces {
+		if space.ParsedShardDuration() == time.Duration(uint64(0)) {
+			continue
+		}
+		expiredTime := time.Now().Add(-space.ParsedShardDuration())
+		for _, shard := range space.Shards {
+			if shard.endTime.Before(expiredTime) {
+				shards = append(shards, shard)
+			}
+		}
+	}
+	return shards
+}
+
+func (self *ClusterConfiguration) automaticallyCreateFutureShard(shardSpace *ShardSpace) {
+	if len(shardSpace.Shards) == 0 {
 		// don't automatically create shards if they haven't created any yet.
 		return
 	}
-	latestShard := shards[0]
+	latestShard := shardSpace.Shards[0]
 	if latestShard.endTime.Add(-15*time.Minute).Unix() < time.Now().Unix() {
 		newShardTime := latestShard.endTime.Add(time.Second)
 		microSecondEpochForNewShard := newShardTime.Unix() * 1000 * 1000
 		log.Info("Automatically creating shard for %s", newShardTime.Format("Mon Jan 2 15:04:05 -0700 MST 2006"))
-		self.createShards(microSecondEpochForNewShard, shardType)
+		self.createShards(microSecondEpochForNewShard, shardSpace)
 	}
 }
 
@@ -526,11 +581,11 @@ type SavedConfiguration struct {
 	Admins            map[string]*ClusterAdmin
 	DbUsers           map[string]map[string]*DbUser
 	Servers           []*ClusterServer
-	ShortTermShards   []*NewShardData
-	LongTermShards    []*NewShardData
 	ContinuousQueries map[string][]*ContinuousQuery
 	MetaStore         *metastore.Store
 	LastShardIdUsed   uint32
+	ShardSpaces       []*ShardSpace
+	Shards            []*NewShardData
 }
 
 func (self *ClusterConfiguration) Save() ([]byte, error) {
@@ -541,10 +596,10 @@ func (self *ClusterConfiguration) Save() ([]byte, error) {
 		DbUsers:           self.dbUsers,
 		Servers:           self.servers,
 		ContinuousQueries: self.continuousQueries,
-		ShortTermShards:   self.convertShardsToNewShardData(self.shortTermShards),
-		LongTermShards:    self.convertShardsToNewShardData(self.longTermShards),
 		LastShardIdUsed:   self.lastShardIdUsed,
 		MetaStore:         self.MetaStore,
+		ShardSpaces:       self.shardSpaces,
+		Shards:            self.convertShardsToNewShardData(self.shards),
 	}
 
 	for k := range self.DatabaseReplicationFactors {
@@ -563,7 +618,7 @@ func (self *ClusterConfiguration) Save() ([]byte, error) {
 func (self *ClusterConfiguration) convertShardsToNewShardData(shards []*ShardData) []*NewShardData {
 	newShardData := make([]*NewShardData, len(shards), len(shards))
 	for i, shard := range shards {
-		newShardData[i] = &NewShardData{Id: shard.id, Type: shard.shardType, StartTime: shard.startTime, EndTime: shard.endTime, ServerIds: shard.serverIds, DurationSplit: shard.durationIsSplit}
+		newShardData[i] = &NewShardData{Id: shard.id, SpaceName: shard.SpaceName, StartTime: shard.startTime, EndTime: shard.endTime, ServerIds: shard.serverIds}
 	}
 	return newShardData
 }
@@ -571,7 +626,7 @@ func (self *ClusterConfiguration) convertShardsToNewShardData(shards []*ShardDat
 func (self *ClusterConfiguration) convertNewShardDataToShards(newShards []*NewShardData) []*ShardData {
 	shards := make([]*ShardData, len(newShards), len(newShards))
 	for i, newShard := range newShards {
-		shard := NewShard(newShard.Id, newShard.StartTime, newShard.EndTime, newShard.Type, newShard.DurationSplit, self.wal)
+		shard := NewShard(newShard.Id, newShard.StartTime, newShard.EndTime, newShard.SpaceName, self.wal)
 		servers := make([]*ClusterServer, 0)
 		for _, serverId := range newShard.ServerIds {
 			if serverId == self.LocalServer.Id {
@@ -626,34 +681,31 @@ func (self *ClusterConfiguration) Recovery(b []byte) error {
 		server.StartHeartbeat()
 	}
 
-	self.shardsByIdLock.Lock()
-	self.shardLock.Lock()
-	defer self.shardsByIdLock.Unlock()
-	defer self.shardLock.Unlock()
-	self.shortTermShards = self.convertNewShardDataToShards(data.ShortTermShards)
-	self.longTermShards = self.convertNewShardDataToShards(data.LongTermShards)
-
+	self.shards = self.convertNewShardDataToShards(data.Shards)
 	highestShardId := uint32(0)
-	for _, s := range self.shortTermShards {
+	for _, s := range self.shards {
 		shard := s
 		self.shardsById[s.id] = shard
 		if s.id > highestShardId {
 			highestShardId = s.id
 		}
 	}
-	for _, s := range self.longTermShards {
-		shard := s
-		self.shardsById[s.id] = shard
-		if s.id > highestShardId {
-			highestShardId = s.id
-		}
-	}
-
 	if data.LastShardIdUsed == 0 {
 		self.lastShardIdUsed = highestShardId
 	} else {
 		self.lastShardIdUsed = data.LastShardIdUsed
 	}
+	// go through adding them so the other in memory structures get built
+	for _, space := range data.ShardSpaces {
+		self.AddShardSpace(space)
+		for _, shard := range self.shards {
+			if shard.SpaceName == space.Name {
+				space.Shards = append(space.Shards, shard)
+			}
+		}
+		SortShardsByTimeDescending(space.Shards)
+	}
+	SortShardsByTimeDescending(self.shards)
 
 	for db, queries := range data.ContinuousQueries {
 		for _, query := range queries {
@@ -711,23 +763,26 @@ func (self *ClusterConfiguration) GetMapForJsonSerialization() map[string]interf
 	return jsonObject
 }
 
-func (self *ClusterConfiguration) GetShardToWriteToBySeriesAndTime(db, series string, microsecondsEpoch int64) (*ShardData, error) {
-	shards := self.shortTermShards
-	//	split := self.config.ShortTermShard.Split
-	hasRandomSplit := self.config.ShortTermShard.HasRandomSplit()
-	splitRegex := self.config.ShortTermShard.SplitRegex()
-	shardType := SHORT_TERM
+func (self *ClusterConfiguration) createDefaultShardSpace() (*ShardSpace, error) {
+	space := NewShardSpace(DEFAULT_SHARD_SPACE_NAME)
+	err := self.shardCreator.CreateShardSpace(space)
+	if err != nil {
+		return nil, err
+	}
+	return space, nil
+}
 
-	firstChar := series[0]
-	if firstChar < FIRST_LOWER_CASE_CHARACTER {
-		shardType = LONG_TERM
-		shards = self.longTermShards
-		//		split = self.config.LongTermShard.Split
-		hasRandomSplit = self.config.LongTermShard.HasRandomSplit()
-		splitRegex = self.config.LongTermShard.SplitRegex()
+func (self *ClusterConfiguration) GetShardToWriteToBySeriesAndTime(db, series string, microsecondsEpoch int64) (*ShardData, error) {
+	shardSpace := self.getShardSpaceToMatchSeriesName(db, series)
+	if shardSpace == nil {
+		var err error
+		shardSpace, err = self.createDefaultShardSpace()
+		if err != nil {
+			return nil, err
+		}
 	}
 	matchingShards := make([]*ShardData, 0)
-	for _, s := range shards {
+	for _, s := range shardSpace.Shards {
 		if s.IsMicrosecondInRange(microsecondsEpoch) {
 			matchingShards = append(matchingShards, s)
 		} else if len(matchingShards) > 0 {
@@ -739,7 +794,7 @@ func (self *ClusterConfiguration) GetShardToWriteToBySeriesAndTime(db, series st
 	var err error
 	if len(matchingShards) == 0 {
 		log.Info("No matching shards for write at time %du, creating...", microsecondsEpoch)
-		matchingShards, err = self.createShards(microsecondsEpoch, shardType)
+		matchingShards, err = self.createShards(microsecondsEpoch, shardSpace)
 		if err != nil {
 			return nil, err
 		}
@@ -749,24 +804,12 @@ func (self *ClusterConfiguration) GetShardToWriteToBySeriesAndTime(db, series st
 		return matchingShards[0], nil
 	}
 
-	if hasRandomSplit && splitRegex.MatchString(series) {
-		return matchingShards[self.random.Intn(len(matchingShards))], nil
-	}
 	index := HashDbAndSeriesToInt(db, series)
 	index = index % len(matchingShards)
 	return matchingShards[index], nil
 }
 
-func (self *ClusterConfiguration) createShards(microsecondsEpoch int64, shardType ShardType) ([]*ShardData, error) {
-	numberOfShardsToCreateForDuration := 1
-	var secondsOfDuration float64
-	if shardType == LONG_TERM {
-		numberOfShardsToCreateForDuration = self.config.LongTermShard.Split
-		secondsOfDuration = self.config.LongTermShard.ParsedDuration().Seconds()
-	} else {
-		numberOfShardsToCreateForDuration = self.config.ShortTermShard.Split
-		secondsOfDuration = self.config.ShortTermShard.ParsedDuration().Seconds()
-	}
+func (self *ClusterConfiguration) createShards(microsecondsEpoch int64, shardSpace *ShardSpace) ([]*ShardData, error) {
 	startIndex := 0
 	if self.lastServerToGetShard != nil {
 		for i, server := range self.servers {
@@ -777,16 +820,17 @@ func (self *ClusterConfiguration) createShards(microsecondsEpoch int64, shardTyp
 	}
 
 	shards := make([]*NewShardData, 0)
-	startTime, endTime := self.getStartAndEndBasedOnDuration(microsecondsEpoch, secondsOfDuration)
+	startTime, endTime := self.getStartAndEndBasedOnDuration(microsecondsEpoch, shardSpace.SecondsOfDuration())
 
-	log.Info("createShards: start: %s. end: %s",
+	log.Info("createShards for space %s: start: %s. end: %s",
+		shardSpace.Name,
 		startTime.Format("Mon Jan 2 15:04:05 -0700 MST 2006"), endTime.Format("Mon Jan 2 15:04:05 -0700 MST 2006"))
 
-	for i := numberOfShardsToCreateForDuration; i > 0; i-- {
+	for i := shardSpace.Split; i > 0; i-- {
 		serverIds := make([]uint32, 0)
 
 		// if they have the replication factor set higher than the number of servers in the cluster, limit it
-		rf := self.config.ReplicationFactor
+		rf := int(shardSpace.ReplicationFactor)
 		if rf > len(self.servers) {
 			rf = len(self.servers)
 		}
@@ -800,11 +844,11 @@ func (self *ClusterConfiguration) createShards(microsecondsEpoch int64, shardTyp
 			serverIds = append(serverIds, server.Id)
 			startIndex += 1
 		}
-		shards = append(shards, &NewShardData{StartTime: *startTime, EndTime: *endTime, ServerIds: serverIds, Type: shardType})
+		shards = append(shards, &NewShardData{StartTime: *startTime, EndTime: *endTime, ServerIds: serverIds, SpaceName: shardSpace.Name})
 	}
 
 	// call out to rafter server to create the shards (or return shard objects that the leader already knows about)
-	createdShards, err := self.shardCreator.CreateShards(shards)
+	createdShards, err := self.shardCreator.CreateShards(shardSpace.Name, shards)
 	if err != nil {
 		return nil, err
 	}
@@ -823,49 +867,60 @@ func (self *ClusterConfiguration) getStartAndEndBasedOnDuration(microsecondsEpoc
 	return &startTime, &endTime
 }
 
-func (self *ClusterConfiguration) GetShards(querySpec *parser.QuerySpec) []*ShardData {
-	self.shardsByIdLock.RLock()
-	defer self.shardsByIdLock.RUnlock()
-
-	shouldQueryShortTerm, shouldQueryLongTerm := querySpec.ShouldQueryShortTermAndLongTerm()
-
-	if shouldQueryLongTerm && shouldQueryShortTerm {
-		shards := make([]*ShardData, 0)
-		shards = append(shards, self.getShardRange(querySpec, self.shortTermShards)...)
-		shards = append(shards, self.getShardRange(querySpec, self.longTermShards)...)
-		if querySpec.IsAscending() {
-			SortShardsByTimeAscending(shards)
-		} else {
-			SortShardsByTimeDescending(shards)
-		}
-		return shards
-	}
-
-	var shards []*ShardData
-	if shouldQueryLongTerm {
-		shards = self.getShardRange(querySpec, self.longTermShards)
-	} else {
-		shards = self.getShardRange(querySpec, self.shortTermShards)
-	}
+func (self *ClusterConfiguration) GetShardsForQuery(querySpec *parser.QuerySpec) []*ShardData {
+	shards := self.getShardsToMatchQuery(querySpec)
+	shards = self.getShardRange(querySpec, shards)
 	if querySpec.IsAscending() {
-		newShards := append([]*ShardData{}, shards...)
-		SortShardsByTimeAscending(newShards)
-		return newShards
+		SortShardsByTimeAscending(shards)
 	}
 	return shards
 }
 
-func (self *ClusterConfiguration) GetLongTermShards() []*ShardData {
-	return self.longTermShards
+func (self *ClusterConfiguration) getShardsToMatchQuery(querySpec *parser.QuerySpec) []*ShardData {
+	self.shardLock.RLock()
+	defer self.shardLock.RUnlock()
+	seriesNames, fromRegex := querySpec.TableNamesAndRegex()
+	if fromRegex != nil {
+		seriesNames = self.MetaStore.GetSeriesForDatabaseAndRegex(querySpec.Database(), fromRegex)
+	}
+	uniqueShards := make(map[uint32]*ShardData)
+	for _, name := range seriesNames {
+		space := self.getShardSpaceToMatchSeriesName(querySpec.Database(), name)
+		for _, shard := range space.Shards {
+			uniqueShards[shard.id] = shard
+		}
+	}
+	shards := make([]*ShardData, 0, len(uniqueShards))
+	for _, shard := range uniqueShards {
+		shards = append(shards, shard)
+	}
+	SortShardsByTimeDescending(shards)
+	return shards
 }
 
-func (self *ClusterConfiguration) GetShortTermShards() []*ShardData {
-	return self.shortTermShards
+func (self *ClusterConfiguration) getShardSpaceToMatchSeriesName(database, name string) *ShardSpace {
+	// order of matching for any series. First look at the database specific shard
+	// spaces. Then look at the defaults.
+	databaseSpaces := self.databaseShardSpaces[database]
+	if databaseSpaces != nil {
+		for _, s := range databaseSpaces {
+			if s.MatchesSeries(name) {
+				return s
+			}
+		}
+	}
+	for _, s := range self.defaultShardSpaces {
+		if s.MatchesSeries(name) {
+			return s
+		}
+	}
+	return nil
 }
 
 func (self *ClusterConfiguration) GetAllShards() []*ShardData {
-	sh := append([]*ShardData{}, self.shortTermShards...)
-	return append(sh, self.longTermShards...)
+	self.shardLock.RLock()
+	defer self.shardLock.RUnlock()
+	return self.shards
 }
 
 func (self *ClusterConfiguration) getShardRange(querySpec QuerySpec, shards []*ShardData) []*ShardData {
@@ -918,7 +973,7 @@ func HashDbAndSeriesToInt(database, series string) int {
 // Add shards expects all shards to be of the same type (long term or short term) and have the same
 // start and end times. This is called to add the shard set for a given duration. If existing
 // shards have the same times, those are returned.
-func (self *ClusterConfiguration) AddShards(shards []*NewShardData) ([]*ShardData, error) {
+func (self *ClusterConfiguration) AddShards(spaceName string, shards []*NewShardData) ([]*ShardData, error) {
 	self.shardLock.Lock()
 	defer self.shardLock.Unlock()
 
@@ -932,29 +987,21 @@ func (self *ClusterConfiguration) AddShards(shards []*NewShardData) ([]*ShardDat
 	startTime := shards[0].StartTime
 	endTime := shards[0].EndTime
 
-	shardType := SHORT_TERM
-	existingShards := self.shortTermShards
-	if shards[0].Type == LONG_TERM {
-		shardType = LONG_TERM
-		existingShards = self.longTermShards
-	}
-
-	for _, s := range existingShards {
-		if s.startTime.Unix() == startTime.Unix() && s.endTime.Unix() == endTime.Unix() {
+	for _, s := range self.shards {
+		if s.startTime.Unix() == startTime.Unix() && s.endTime.Unix() == endTime.Unix() && s.SpaceName == spaceName {
 			createdShards = append(createdShards, s)
 		}
 	}
 
 	if len(createdShards) > 0 {
-		log.Info("AddShards called when shards already existing")
+		log.Debug("AddShards called when shards already existing")
 		return createdShards, nil
 	}
 
-	durationIsSplit := len(shards) > 1
 	for _, newShard := range shards {
 		id := self.lastShardIdUsed + 1
 		self.lastShardIdUsed = id
-		shard := NewShard(id, newShard.StartTime, newShard.EndTime, shardType, durationIsSplit, self.wal)
+		shard := NewShard(id, newShard.StartTime, newShard.EndTime, spaceName, self.wal)
 		servers := make([]*ClusterServer, 0)
 		for _, serverId := range newShard.ServerIds {
 			// if a shard is created before the local server then the local
@@ -972,36 +1019,33 @@ func (self *ClusterConfiguration) AddShards(shards []*NewShardData) ([]*ShardDat
 		}
 		shard.SetServers(servers)
 
-		self.shardsByIdLock.Lock()
-		self.shardsById[shard.id] = shard
-		self.shardsByIdLock.Unlock()
-
-		message := "Adding long term shard"
-		if newShard.Type == LONG_TERM {
-			self.longTermShards = append(self.longTermShards, shard)
-			SortShardsByTimeDescending(self.longTermShards)
-		} else {
-			message = "Adding short term shard"
-			self.shortTermShards = append(self.shortTermShards, shard)
-			SortShardsByTimeDescending(self.shortTermShards)
-		}
-
 		createdShards = append(createdShards, shard)
 
-		log.Info("%s: %d - start: %s (%d). end: %s (%d). isLocal: %v. servers: %v",
-			message, shard.Id(),
+		log.Info("Adding shard to %s: %d - start: %s (%d). end: %s (%d). isLocal: %v. servers: %v",
+			shard.SpaceName, shard.Id(),
 			shard.StartTime().Format("Mon Jan 2 15:04:05 -0700 MST 2006"), shard.StartTime().Unix(),
 			shard.EndTime().Format("Mon Jan 2 15:04:05 -0700 MST 2006"), shard.EndTime().Unix(),
 			shard.IsLocal, shard.ServerIds())
 	}
+
+	// now add the created shards to the indexes and all that
+	space := self.getShardSpaceByName(spaceName)
+	space.Shards = append(space.Shards, createdShards...)
+	SortShardsByTimeDescending(space.Shards)
+
+	for _, s := range createdShards {
+		self.shardsById[s.id] = s
+	}
+	self.shards = append(self.shards, createdShards...)
+	SortShardsByTimeDescending(self.shards)
+
 	return createdShards, nil
 }
 
 func (self *ClusterConfiguration) MarshalNewShardArrayToShards(newShards []*NewShardData) ([]*ShardData, error) {
 	shards := make([]*ShardData, len(newShards), len(newShards))
-	durationIsSplit := len(newShards) > 1
 	for i, s := range newShards {
-		shard := NewShard(s.Id, s.StartTime, s.EndTime, s.Type, durationIsSplit, self.wal)
+		shard := NewShard(s.Id, s.StartTime, s.EndTime, s.SpaceName, self.wal)
 		servers := make([]*ClusterServer, 0)
 		for _, serverId := range s.ServerIds {
 			if serverId == self.LocalServer.Id {
@@ -1023,14 +1067,14 @@ func (self *ClusterConfiguration) MarshalNewShardArrayToShards(newShards []*NewS
 // This function is for the request handler to get the shard to write a
 // request to locally.
 func (self *ClusterConfiguration) GetLocalShardById(id uint32) *ShardData {
-	self.shardsByIdLock.RLock()
-	defer self.shardsByIdLock.RUnlock()
+	self.shardLock.RLock()
+	defer self.shardLock.RUnlock()
 	shard := self.shardsById[id]
 
 	// If it's nil it just means that it hasn't been replicated by Raft yet.
 	// Just create a fake local shard temporarily for the write.
 	if shard == nil {
-		shard = NewShard(id, time.Now(), time.Now(), LONG_TERM, false, self.wal)
+		shard = NewShard(id, time.Now(), time.Now(), "", self.wal)
 		shard.SetServers([]*ClusterServer{})
 		shard.SetLocalStore(self.shardStore, self.LocalServer.Id)
 	}
@@ -1136,13 +1180,13 @@ func (self *ClusterConfiguration) shardIdsForServerId(serverId uint32) []uint32 
 }
 
 func (self *ClusterConfiguration) updateOrRemoveShard(shardId uint32, serverIds []uint32) {
-	self.shardsByIdLock.RLock()
-	shard := self.shardsById[shardId]
-	self.shardsByIdLock.RUnlock()
+	self.shardLock.Lock()
+	defer self.shardLock.Unlock()
 
+	shard := self.shardsById[shardId]
 	// may not be in the map, try to get it from the list
 	if shard == nil {
-		for _, s := range self.GetAllShards() {
+		for _, s := range self.shards {
 			if s.id == shardId {
 				shard = s
 				break
@@ -1153,12 +1197,13 @@ func (self *ClusterConfiguration) updateOrRemoveShard(shardId uint32, serverIds 
 		log.Error("Attempted to remove shard %d, which we couldn't find. %d shards currently loaded.", shardId, len(self.GetAllShards()))
 	}
 
+	// we're removing the shard from the entire cluster
 	if len(shard.serverIds) == len(serverIds) {
-		self.removeShard(shardId)
+		self.removeShard(shard)
 		return
 	}
-	self.shardsByIdLock.Lock()
-	defer self.shardsByIdLock.Unlock()
+
+	// just remove the shard from the specified servers
 	newIds := make([]uint32, 0)
 	for _, oldId := range shard.serverIds {
 		include := true
@@ -1175,28 +1220,87 @@ func (self *ClusterConfiguration) updateOrRemoveShard(shardId uint32, serverIds 
 	shard.serverIds = newIds
 }
 
-func (self *ClusterConfiguration) removeShard(shardId uint32) {
+func (self *ClusterConfiguration) removeShard(shard *ShardData) {
+	delete(self.shardsById, shard.id)
+	shards := self.shards
+
+	for _, s := range self.shards {
+		if s.id != shard.id {
+			shards = append(shards, s)
+		}
+	}
+	self.shards = shards
+	space := self.getShardSpaceByName(shard.SpaceName)
+	spaceShards := make([]*ShardData, 0)
+	for _, s := range space.Shards {
+		if s.id != shard.id {
+			spaceShards = append(spaceShards, s)
+		}
+	}
+	space.Shards = spaceShards
+	return
+}
+
+func (self *ClusterConfiguration) AddShardSpace(space *ShardSpace) error {
 	self.shardLock.Lock()
-	self.shardsByIdLock.Lock()
 	defer self.shardLock.Unlock()
-	defer self.shardsByIdLock.Unlock()
-	delete(self.shardsById, shardId)
-
-	for i, shard := range self.shortTermShards {
-		if shard.id == shardId {
-			copy(self.shortTermShards[i:], self.shortTermShards[i+1:])
-			self.shortTermShards[len(self.shortTermShards)-1] = nil
-			self.shortTermShards = self.shortTermShards[:len(self.shortTermShards)-1]
-			return
+	for _, s := range self.shardSpaces {
+		if s.Name == space.Name {
+			return nil
 		}
 	}
+	self.shardSpaces = append(self.shardSpaces, space)
+	if space.Database != "" {
+		databaseSpaces := self.databaseShardSpaces[space.Database]
+		if databaseSpaces == nil {
+			databaseSpaces = make([]*ShardSpace, 0)
+		}
+		databaseSpaces = append(databaseSpaces, space)
+		self.databaseShardSpaces[space.Database] = databaseSpaces
+	} else {
+		self.defaultShardSpaces = append(self.defaultShardSpaces, space)
+	}
+	return nil
+}
 
-	for i, shard := range self.longTermShards {
-		if shard.id == shardId {
-			copy(self.longTermShards[i:], self.longTermShards[i+1:])
-			self.longTermShards[len(self.longTermShards)-1] = nil
-			self.longTermShards = self.longTermShards[:len(self.longTermShards)-1]
-			return
+func (self *ClusterConfiguration) RemoveShardSpace(name string) error {
+	log.Info("Dropping shard space: %s", name)
+	self.shardLock.Lock()
+	defer self.shardLock.Unlock()
+	space := self.getShardSpaceByName(name)
+	if space == nil {
+		return nil
+	}
+	shardSpaces := make([]*ShardSpace, 0)
+	for _, s := range self.shardSpaces {
+		if s.Name != space.Name {
+			shardSpaces = append(shardSpaces, s)
 		}
 	}
+	self.shardSpaces = shardSpaces
+	if space.Database != "" {
+		delete(self.databaseShardSpaces, space.Database)
+	} else {
+		defaultSpaces := make([]*ShardSpace, 0)
+		for _, s := range self.defaultShardSpaces {
+			if s.Name != space.Name {
+				defaultSpaces = append(defaultSpaces, s)
+			}
+		}
+	}
+	go func() {
+		for _, s := range space.Shards {
+			self.shardStore.DeleteShard(s.id)
+		}
+	}()
+	return nil
+}
+
+func (self *ClusterConfiguration) getShardSpaceByName(name string) *ShardSpace {
+	for _, s := range self.shardSpaces {
+		if s.Name == name {
+			return s
+		}
+	}
+	return nil
 }

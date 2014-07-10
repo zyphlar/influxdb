@@ -605,12 +605,12 @@ func (self *SingleServerSuite) TestDuplicateShardsNotCreatedWhenOldShardDropped(
   }
 ]`, c)
 	client := self.server.GetClient("", c)
-	shards, err := client.GetShards()
+	shards, err := client.GetShardsV2()
 	c.Assert(err, IsNil)
-	c.Assert(len(shards.ShortTerm) > 1, Equals, true)
+	c.Assert(len(shards) > 1, Equals, true)
 
 	ids := make(map[uint32]bool)
-	for _, s := range shards.ShortTerm {
+	for _, s := range shards {
 		hasId := ids[s.Id]
 		if hasId {
 			c.Error("Shard id shows up twice: ", s.Id)
@@ -618,11 +618,11 @@ func (self *SingleServerSuite) TestDuplicateShardsNotCreatedWhenOldShardDropped(
 		ids[s.Id] = true
 	}
 
-	oldShardCount := len(shards.ShortTerm)
-	client.DropShard(shards.ShortTerm[0].Id, []uint32{uint32(1)})
-	shards, err = client.GetShards()
+	oldShardCount := len(shards)
+	client.DropShard(shards[0].Id, []uint32{uint32(1)})
+	shards, err = client.GetShardsV2()
 	c.Assert(err, IsNil)
-	c.Assert(len(shards.ShortTerm), Equals, oldShardCount-1)
+	c.Assert(len(shards), Equals, oldShardCount-1)
 	self.server.WriteData(`
 [
   {
@@ -631,16 +631,97 @@ func (self *SingleServerSuite) TestDuplicateShardsNotCreatedWhenOldShardDropped(
     "points":[[130723342, 1]]
   }
 ]`, c)
-	shards, err = client.GetShards()
+	shards, err = client.GetShardsV2()
 	c.Assert(err, IsNil)
-	c.Assert(len(shards.ShortTerm), Equals, oldShardCount)
+	c.Assert(len(shards), Equals, oldShardCount)
 
 	ids = make(map[uint32]bool)
-	for _, s := range shards.ShortTerm {
+	for _, s := range shards {
 		hasId := ids[s.Id]
 		if hasId {
 			c.Error("Shard id shows up twice: ", s.Id)
 		}
 		ids[s.Id] = true
 	}
+}
+
+func (self *SingleServerSuite) TestCreateShardSpace(c *C) {
+	// creates a default space
+	self.server.WriteData(`
+[
+  {
+    "name": "test_create_shard_space",
+    "columns": ["time", "val"],
+    "points":[[1307997668000, 1]]
+  }
+]`, c)
+	client := self.server.GetClient("", c)
+	spaces, err := client.GetShardSpaces()
+	c.Assert(err, IsNil)
+	c.Assert(spaces, HasLen, 1)
+	c.Assert(spaces[0].Name, Equals, "default")
+
+	space := &influxdb.ShardSpace{Name: "month", RetentionPolicy: "30d", Database: "db1", Regex: "/^the_dude_abides/"}
+	err = client.CreateShardSpace(space)
+	c.Assert(err, IsNil)
+
+	self.server.WriteData(`
+[
+  {
+    "name": "the_dude_abides",
+    "columns": ["time", "val"],
+    "points":[[1307997668000, 1]]
+  }
+]`, c)
+	spaces, err = client.GetShardSpaces()
+	c.Assert(err, IsNil)
+	c.Assert(self.hasSpace("month", spaces), Equals, true)
+	shards, err := client.GetShardsV2()
+	c.Assert(err, IsNil)
+	shards = self.getShardsForSpace("month", shards)
+	c.Assert(shards, HasLen, 1)
+}
+
+func (self *SingleServerSuite) getShardsForSpace(name string, shards []*influxdb.Shard) []*influxdb.Shard {
+	filteredShards := make([]*influxdb.Shard, 0)
+	for _, s := range shards {
+		if s.SpaceName == name {
+			filteredShards = append(filteredShards, s)
+		}
+	}
+	return filteredShards
+}
+
+func (self *SingleServerSuite) hasSpace(name string, spaces []*influxdb.ShardSpace) bool {
+	for _, s := range spaces {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (self *SingleServerSuite) TestDropShardSpace(c *C) {
+	client := self.server.GetClient("", c)
+	spaceName := "test_drop"
+	space := &influxdb.ShardSpace{Name: spaceName, RetentionPolicy: "30d", Database: "db1", Regex: "/^dont_drop_me_bro/"}
+	err := client.CreateShardSpace(space)
+	c.Assert(err, IsNil)
+
+	self.server.WriteData(`
+[
+  {
+    "name": "dont_drop_me_bro",
+    "columns": ["time", "val"],
+    "points":[[1307997668000, 1]]
+  }
+]`, c)
+	spaces, err := client.GetShardSpaces()
+	c.Assert(err, IsNil)
+	c.Assert(self.hasSpace(spaceName, spaces), Equals, true)
+	err = client.DropShardSpace(spaceName)
+	c.Assert(err, IsNil)
+	spaces, err = client.GetShardSpaces()
+	c.Assert(err, IsNil)
+	c.Assert(self.hasSpace(spaceName, spaces), Equals, false)
 }

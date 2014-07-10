@@ -702,9 +702,9 @@ func (s *RaftServer) processCommandHandler(w http.ResponseWriter, req *http.Requ
 	}
 }
 
-func (self *RaftServer) CreateShards(shards []*cluster.NewShardData) ([]*cluster.ShardData, error) {
+func (self *RaftServer) CreateShards(spaceName string, shards []*cluster.NewShardData) ([]*cluster.ShardData, error) {
 	log.Debug("RAFT: CreateShards")
-	command := NewCreateShardsCommand(shards)
+	command := NewCreateShardsCommand(spaceName, shards)
 	createShardsResult, err := self.doOrProxyCommand(command)
 	if err != nil {
 		log.Error("RAFT: CreateShards: ", err)
@@ -764,5 +764,17 @@ func (self *RaftServer) DropSeries(database, series string) error {
 	if err == nil {
 		err = self.ForceLogCompaction()
 	}
+	return err
+}
+
+func (self *RaftServer) CreateShardSpace(shardSpace *cluster.ShardSpace) error {
+	command := NewCreateShardSpaceCommand(shardSpace)
+	_, err := self.doOrProxyCommand(command)
+	return err
+}
+
+func (self *RaftServer) DropShardSpace(name string) error {
+	command := NewDropShardSpaceCommand(name)
+	_, err := self.doOrProxyCommand(command)
 	return err
 }

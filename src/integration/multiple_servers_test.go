@@ -934,46 +934,6 @@ func (self *ServerSuite) TestGetServers(c *C) {
 	}
 }
 
-func (self *ServerSuite) TestCreateAndGetShards(c *C) {
-	// put this far in the future so it doesn't mess up the other tests
-	secondsOffset := int64(86400 * 365)
-	startSeconds := time.Now().Unix() + secondsOffset
-	endSeconds := startSeconds + 3600
-	data := fmt.Sprintf(`{
-		"startTime":%d,
-		"endTime":%d,
-		"longTerm": false,
-		"shards": [{
-			"serverIds": [%d, %d]
-		}]
-	}`, startSeconds, endSeconds, 2, 3)
-	resp := self.serverProcesses[0].Post("/cluster/shards?u=root&p=root", data, c)
-	c.Assert(resp.StatusCode, Equals, http.StatusAccepted)
-	for _, s := range self.serverProcesses {
-		s.WaitForServerToSync()
-	}
-	for _, s := range self.serverProcesses {
-		body := s.Get("/cluster/shards?u=root&p=root", c)
-		res := make(map[string]interface{})
-		err := json.Unmarshal(body, &res)
-		c.Assert(err, IsNil)
-		hasShard := false
-		for _, s := range res["shortTerm"].([]interface{}) {
-			sh := s.(map[string]interface{})
-			if sh["startTime"].(float64) == float64(startSeconds) && sh["endTime"].(float64) == float64(endSeconds) {
-				servers := sh["serverIds"].([]interface{})
-				c.Assert(servers, HasLen, 2)
-				c.Assert(servers[0].(float64), Equals, 2.0)
-				c.Assert(servers[1].(float64), Equals, 3.0)
-				hasShard = true
-				break
-			}
-		}
-		c.Assert(hasShard, Equals, true)
-	}
-
-}
-
 func (self *ServerSuite) TestDropShard(c *C) {
 	// put this far in the future so it doesn't mess up the other tests
 	secondsOffset := int64(86400 * 720)
@@ -982,7 +942,7 @@ func (self *ServerSuite) TestDropShard(c *C) {
 	data := fmt.Sprintf(`{
 		"startTime":%d,
 		"endTime":%d,
-		"longTerm": false,
+		"spaceName": "default",
 		"shards": [{
 			"serverIds": [%d, %d]
 		}]
@@ -1002,11 +962,11 @@ func (self *ServerSuite) TestDropShard(c *C) {
 
 	// and find the shard id
 	body := self.serverProcesses[0].Get("/cluster/shards?u=root&p=root", c)
-	res := make(map[string]interface{})
+	res := make([]interface{}, 0)
 	err := json.Unmarshal(body, &res)
 	c.Assert(err, IsNil)
 	var shardId int
-	for _, s := range res["shortTerm"].([]interface{}) {
+	for _, s := range res {
 		sh := s.(map[string]interface{})
 		if sh["startTime"].(float64) == float64(startSeconds) && sh["endTime"].(float64) == float64(endSeconds) {
 			shardId = int(sh["id"].(float64))
@@ -1015,8 +975,8 @@ func (self *ServerSuite) TestDropShard(c *C) {
 	}
 
 	// confirm the shard files are there
-	shardDirServer1 := fmt.Sprintf("/tmp/influxdb/test/1/db/shard_db/%.5d", shardId)
-	shardDirServer2 := fmt.Sprintf("/tmp/influxdb/test/2/db/shard_db/%.5d", shardId)
+	shardDirServer1 := fmt.Sprintf("/tmp/influxdb/test/1/db/shard_db_v2/%.5d", shardId)
+	shardDirServer2 := fmt.Sprintf("/tmp/influxdb/test/2/db/shard_db_v2/%.5d", shardId)
 	exists, _ := dirExists(shardDirServer1)
 	c.Assert(exists, Equals, true)
 	exists, _ = dirExists(shardDirServer2)
@@ -1033,11 +993,11 @@ func (self *ServerSuite) TestDropShard(c *C) {
 
 	for _, s := range self.serverProcesses {
 		body := s.Get("/cluster/shards?u=root&p=root", c)
-		res := make(map[string]interface{})
+		res := make([]interface{}, 0)
 		err := json.Unmarshal(body, &res)
 		c.Assert(err, IsNil)
 		hasShard := false
-		for _, s := range res["shortTerm"].([]interface{}) {
+		for _, s := range res {
 			sh := s.(map[string]interface{})
 			if int(sh["id"].(float64)) == shardId {
 				hasShard = true
@@ -1070,11 +1030,11 @@ func (self *ServerSuite) TestDropShard(c *C) {
 
 	for _, s := range self.serverProcesses {
 		body := s.Get("/cluster/shards?u=root&p=root", c)
-		res := make(map[string]interface{})
+		res := make([]interface{}, 0)
 		err := json.Unmarshal(body, &res)
 		c.Assert(err, IsNil)
 		hasShard := false
-		for _, s := range res["shortTerm"].([]interface{}) {
+		for _, s := range res {
 			sh := s.(map[string]interface{})
 			if int(sh["id"].(float64)) == shardId {
 				hasShard = true
@@ -1202,11 +1162,11 @@ func (self *ServerSuite) TestShardIdUniquenessAfterReStart(c *C) {
 	server.Post("/db/test_rep/series?u=paul&p=pass", data, c)
 
 	body := server.Get("/cluster/shards?u=root&p=root", c)
-	res := make(map[string]interface{})
+	res := make([]interface{}, 0)
 	err := json.Unmarshal(body, &res)
 	c.Assert(err, IsNil)
 	shardIds := make(map[float64]bool)
-	for _, s := range res["shortTerm"].([]interface{}) {
+	for _, s := range res {
 		sh := s.(map[string]interface{})
 		shardId := sh["id"].(float64)
 		hasId := shardIds[shardId]
@@ -1236,11 +1196,11 @@ func (self *ServerSuite) TestShardIdUniquenessAfterReStart(c *C) {
 	server.Post("/db/test_rep/series?u=paul&p=pass", data, c)
 
 	body = server.Get("/cluster/shards?u=root&p=root", c)
-	res = make(map[string]interface{})
+	res = make([]interface{}, 0)
 	err = json.Unmarshal(body, &res)
 	c.Assert(err, IsNil)
 	shardIds = make(map[float64]bool)
-	for _, s := range res["shortTerm"].([]interface{}) {
+	for _, s := range res {
 		sh := s.(map[string]interface{})
 		shardId := sh["id"].(float64)
 		hasId := shardIds[shardId]

@@ -46,12 +46,11 @@ type QueryProcessor interface {
 }
 
 type NewShardData struct {
-	Id            uint32 `json:",omitempty"`
-	StartTime     time.Time
-	EndTime       time.Time
-	ServerIds     []uint32
-	Type          ShardType
-	DurationSplit bool `json:",omitempty"`
+	Id        uint32 `json:",omitempty"`
+	SpaceName string
+	StartTime time.Time
+	EndTime   time.Time
+	ServerIds []uint32
 }
 
 type ShardType int
@@ -72,15 +71,14 @@ type ShardData struct {
 	clusterServers   []*ClusterServer
 	store            LocalShardStore
 	serverIds        []uint32
-	shardType        ShardType
-	durationIsSplit  bool
 	shardDuration    time.Duration
 	shardNanoseconds uint64
 	localServerId    uint32
 	IsLocal          bool
+	SpaceName        string
 }
 
-func NewShard(id uint32, startTime, endTime time.Time, shardType ShardType, durationIsSplit bool, wal WAL) *ShardData {
+func NewShard(id uint32, startTime, endTime time.Time, spaceName string, wal WAL) *ShardData {
 	shardDuration := endTime.Sub(startTime)
 	return &ShardData{
 		id:               id,
@@ -90,10 +88,9 @@ func NewShard(id uint32, startTime, endTime time.Time, shardType ShardType, dura
 		startMicro:       common.TimeToMicroseconds(startTime),
 		endMicro:         common.TimeToMicroseconds(endTime),
 		serverIds:        make([]uint32, 0),
-		shardType:        shardType,
-		durationIsSplit:  durationIsSplit,
 		shardDuration:    shardDuration,
 		shardNanoseconds: uint64(shardDuration),
+		SpaceName:        spaceName,
 	}
 }
 
@@ -354,9 +351,6 @@ func (self *ShardData) ShouldAggregateLocally(querySpec *parser.QuerySpec) bool 
 		return false
 	}
 
-	if self.durationIsSplit && querySpec.ReadsFromMultipleSeries() {
-		return false
-	}
 	groupByInterval := querySpec.GetGroupByInterval()
 	if groupByInterval == nil {
 		if querySpec.HasAggregates() {
@@ -521,8 +515,8 @@ func (self *ShardData) ToNewShardData() *NewShardData {
 		Id:        self.id,
 		StartTime: self.startTime,
 		EndTime:   self.endTime,
-		Type:      self.shardType,
 		ServerIds: self.serverIds,
+		SpaceName: self.SpaceName,
 	}
 }
 
