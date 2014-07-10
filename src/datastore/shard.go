@@ -57,7 +57,7 @@ func (self *Shard) Write(database string, series []*protocol.Series) error {
 				keyBuffer.Reset()
 				dataBuffer.Reset()
 
-				binary.Write(keyBuffer, binary.LittleEndian, &id)
+				binary.Write(keyBuffer, binary.BigEndian, &id)
 				timestamp := self.convertTimestampToUint(point.GetTimestampInMicroseconds())
 				// pass the uint64 by reference so binary.Write() doesn't create a new buffer
 				// see the source code for intDataSize() in binary.go

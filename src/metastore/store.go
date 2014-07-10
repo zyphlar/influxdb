@@ -28,7 +28,7 @@ type Field struct {
 
 func (f *Field) IdAsBytes() []byte {
 	idBytes := bytes.NewBuffer(make([]byte, 0, 8))
-	binary.Write(idBytes, binary.LittleEndian, f.Id)
+	binary.Write(idBytes, binary.BigEndian, f.Id)
 	return idBytes.Bytes()
 }
 
