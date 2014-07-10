@@ -1621,9 +1621,11 @@ func (self *DataTestSuite) SeriesListing(c *C) (Fun, Fun) {
 `, c)
 		}, func(client Client) {
 			data := client.RunQuery("list series", c, "m")
+			c.Assert(data, HasLen, 1)
+			maps := ToMap(data[0])
 			names := map[string]bool{}
-			for _, series := range data {
-				names[series.Name] = true
+			for _, m := range maps {
+				names[m["name"].(string)] = true
 			}
 			c.Assert(names["test_series_listing"], Equals, true)
 		}
@@ -1983,11 +1985,11 @@ func (self *DataTestSuite) ListSeries(c *C) (Fun, Fun) {
 			client.WriteJsonData(data, c, "s")
 		}, func(client Client) {
 			collection := client.RunQuery("list series", c)
-			c.Assert(collection, HasLen, 2)
+			c.Assert(collection, HasLen, 1)
+			maps := ToMap(collection[0])
 			names := map[string]bool{}
-			for _, s := range collection {
-				c.Assert(s.Points, HasLen, 0)
-				names[s.Name] = true
+			for _, m := range maps {
+				names[m["name"].(string)] = true
 			}
 			c.Assert(names["cluster_query"], Equals, true)
 			c.Assert(names["another_query"], Equals, true)
