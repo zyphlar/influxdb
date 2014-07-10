@@ -527,7 +527,7 @@ type SavedConfiguration struct {
 	ShortTermShards   []*NewShardData
 	LongTermShards    []*NewShardData
 	ContinuousQueries map[string][]*ContinuousQuery
-	Metastore         metastore.Store
+	Metastore         *metastore.Store
 	LastShardIdUsed   uint32
 }
 
@@ -542,6 +542,7 @@ func (self *ClusterConfiguration) Save() ([]byte, error) {
 		ShortTermShards:   self.convertShardsToNewShardData(self.shortTermShards),
 		LongTermShards:    self.convertShardsToNewShardData(self.longTermShards),
 		LastShardIdUsed:   self.lastShardIdUsed,
+		Metastore:         self.Metastore,
 	}
 
 	for k := range self.DatabaseReplicationFactors {
@@ -604,6 +605,7 @@ func (self *ClusterConfiguration) Recovery(b []byte) error {
 	self.clusterAdmins = data.Admins
 	self.dbUsers = data.DbUsers
 	self.servers = data.Servers
+	self.Metastore = data.Metastore
 
 	for _, server := range self.servers {
 		log.Info("Checking whether %s is the local server %s", server.RaftName, self.LocalRaftName)
