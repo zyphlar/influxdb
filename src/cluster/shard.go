@@ -296,10 +296,12 @@ func (self *ShardData) Query(querySpec *parser.QuerySpec, response chan *p.Respo
 		}
 		defer self.store.ReturnShard(self.id)
 		err = shard.Query(querySpec, processor)
-		processor.Close()
+		// if we call Close() in case of an error it will mask the error
 		if err != nil {
 			response <- &p.Response{Type: &endStreamResponse, ErrorMessage: p.String(err.Error())}
+			return
 		}
+		processor.Close()
 		response <- &p.Response{Type: &endStreamResponse}
 		return
 	}
