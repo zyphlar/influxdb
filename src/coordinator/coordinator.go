@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"code.google.com/p/goprotobuf/proto"
 	log "code.google.com/p/log4go"
 )
 
@@ -175,8 +176,7 @@ func (self *CoordinatorImpl) runListSeriesQuery(querySpec *parser.QuerySpec, ser
 	points := make([]*protocol.Point, len(series), len(series))
 
 	for i, s := range series {
-		seriesName := s
-		fieldValues := []*protocol.FieldValue{{StringValue: &seriesName}}
+		fieldValues := []*protocol.FieldValue{{StringValue: proto.String(s)}}
 		points[i] = &protocol.Point{Values: fieldValues}
 	}
 
