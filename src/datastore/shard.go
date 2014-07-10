@@ -435,79 +435,6 @@ func (self *Shard) deleteRangeOfRegex(database string, regex *regexp.Regexp, sta
 	return nil
 }
 
-// TODO: remove this function. I'm keeping it around for the moment since it'll probably have to be
-//       used in the DB upgrate/migration that moves metadata from the shard to Raft
-func (self *Shard) getFieldsForSeriesDEPRECATED(db, series string, columns []string) ([]*metastore.Field, error) {
-	isCountQuery := false
-	if len(columns) > 0 && columns[0] == "*" {
-		columns = self.getColumnNamesForSeriesDEPRECATED(db, series)
-	} else if len(columns) == 0 {
-		isCountQuery = true
-		columns = self.getColumnNamesForSeriesDEPRECATED(db, series)
-	}
-	if len(columns) == 0 {
-		return nil, FieldLookupError{"Couldn't look up columns for series: " + series}
-	}
-
-	fields := make([]*metastore.Field, len(columns), len(columns))
-
-	for i, name := range columns {
-		id, errId := self.getIdForDbSeriesColumnDEPRECATED(&db, &series, &name)
-		if errId != nil {
-			return nil, errId
-		}
-		if id == nil {
-			return nil, FieldLookupError{"Field " + name + " doesn't exist in series " + series}
-		}
-		idInt, err := binary.ReadUvarint(bytes.NewBuffer(id))
-		if err != nil {
-			return nil, err
-		}
-		fields[i] = &metastore.Field{Name: name, Id: idInt}
-	}
-
-	// if it's a count query we just want the column that will be the most efficient to
-	// scan through. So find that and return it.
-	if isCountQuery {
-		bestField := fields[0]
-		return []*metastore.Field{bestField}, nil
-	}
-	return fields, nil
-}
-
-// TODO: remove this function. I'm keeping it around for the moment since it'll probably have to be
-//       used in the DB upgrate/migration that moves metadata from the shard to Raft
-func (self *Shard) getColumnNamesForSeriesDEPRECATED(db, series string) []string {
-	dbNameStart := len(SERIES_COLUMN_INDEX_PREFIX)
-	seekKey := append(SERIES_COLUMN_INDEX_PREFIX, []byte(db+"~"+series+"~")...)
-	pred := func(key []byte) bool {
-		return len(key) >= dbNameStart && bytes.Equal(key[:dbNameStart], SERIES_COLUMN_INDEX_PREFIX)
-	}
-	it := self.db.Iterator()
-	defer it.Close()
-
-	names := make([]string, 0)
-	for it.Seek(seekKey); it.Valid(); it.Next() {
-		key := it.Key()
-		if !pred(key) {
-			break
-		}
-		dbSeriesColumn := string(key[dbNameStart:])
-		parts := strings.Split(dbSeriesColumn, "~")
-		if len(parts) > 2 {
-			if parts[0] != db || parts[1] != series {
-				break
-			}
-			names = append(names, parts[2])
-		}
-	}
-	if err := it.Error(); err != nil {
-		log.Error("Error while getting columns for series %s: %s", series, err)
-		return nil
-	}
-	return names
-}
-
 func (self *Shard) hasReadAccess(querySpec *parser.QuerySpec) bool {
 	for series := range querySpec.SeriesValuesAndColumns() {
 		if _, isRegex := series.GetCompiledRegex(); !isRegex {
@@ -524,42 +451,6 @@ func (self *Shard) byteArrayForTime(t time.Time) []byte {
 	timeMicro := common.TimeToMicroseconds(t)
 	binary.Write(timeBuffer, binary.BigEndian, self.convertTimestampToUint(&timeMicro))
 	return timeBuffer.Bytes()
-}
-
-// TODO: remove this on version 0.9 after people have had a chance to do migrations
-func (self *Shard) getSeriesForDbAndRegexDEPRECATED(database string, regex *regexp.Regexp) []string {
-	names := []string{}
-	allSeries := self.metaStore.GetSeriesForDatabase(database)
-	for _, name := range allSeries {
-		if regex.MatchString(name) {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-// TODO: remove this on version 0.9 after people have had a chance to do migrations
-func (self *Shard) getSeriesForDatabaseDEPRECATED(database string) (series []string) {
-	err := self.yieldSeriesNamesForDb(database, func(name string) bool {
-		series = append(series, name)
-		return true
-	})
-	if err != nil {
-		log.Error("Cannot get series names for db %s: %s", database, err)
-		return nil
-	}
-	return series
-}
-
-// TODO: remove this after a version that doesn't support migration from old non-raft metastore
-func (self *Shard) getIdForDbSeriesColumnDEPRECATED(db, series, column *string) (ret []byte, err error) {
-	s := fmt.Sprintf("%s~%s~%s", *db, *series, *column)
-	b := []byte(s)
-	key := append(SERIES_COLUMN_INDEX_PREFIX, b...)
-	if ret, err = self.db.Get(key); err != nil {
-		return nil, err
-	}
-	return ret, nil
 }
 
 func (self *Shard) close() {
@@ -679,4 +570,115 @@ func (self *Shard) getFieldsForSeries(db, series string, columns []string) ([]*m
 		}
 	}
 	return fields, nil
+}
+
+/* DEPRECATED methods do not use*/
+
+// TODO: remove this on version 0.9 after people have had a chance to do migrations
+func (self *Shard) getSeriesForDbAndRegexDEPRECATED(database string, regex *regexp.Regexp) []string {
+	names := []string{}
+	allSeries := self.metaStore.GetSeriesForDatabase(database)
+	for _, name := range allSeries {
+		if regex.MatchString(name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// TODO: remove this on version 0.9 after people have had a chance to do migrations
+func (self *Shard) getSeriesForDatabaseDEPRECATED(database string) (series []string) {
+	err := self.yieldSeriesNamesForDb(database, func(name string) bool {
+		series = append(series, name)
+		return true
+	})
+	if err != nil {
+		log.Error("Cannot get series names for db %s: %s", database, err)
+		return nil
+	}
+	return series
+}
+
+// TODO: remove this function. I'm keeping it around for the moment since it'll probably have to be
+//       used in the DB upgrate/migration that moves metadata from the shard to Raft
+func (self *Shard) getFieldsForSeriesDEPRECATED(db, series string, columns []string) ([]*metastore.Field, error) {
+	isCountQuery := false
+	if len(columns) > 0 && columns[0] == "*" {
+		columns = self.getColumnNamesForSeriesDEPRECATED(db, series)
+	} else if len(columns) == 0 {
+		isCountQuery = true
+		columns = self.getColumnNamesForSeriesDEPRECATED(db, series)
+	}
+	if len(columns) == 0 {
+		return nil, FieldLookupError{"Couldn't look up columns for series: " + series}
+	}
+
+	fields := make([]*metastore.Field, len(columns), len(columns))
+
+	for i, name := range columns {
+		id, errId := self.getIdForDbSeriesColumnDEPRECATED(&db, &series, &name)
+		if errId != nil {
+			return nil, errId
+		}
+		if id == nil {
+			return nil, FieldLookupError{"Field " + name + " doesn't exist in series " + series}
+		}
+		idInt, err := binary.ReadUvarint(bytes.NewBuffer(id))
+		if err != nil {
+			return nil, err
+		}
+		fields[i] = &metastore.Field{Name: name, Id: idInt}
+	}
+
+	// if it's a count query we just want the column that will be the most efficient to
+	// scan through. So find that and return it.
+	if isCountQuery {
+		bestField := fields[0]
+		return []*metastore.Field{bestField}, nil
+	}
+	return fields, nil
+}
+
+// TODO: remove this function. I'm keeping it around for the moment since it'll probably have to be
+//       used in the DB upgrate/migration that moves metadata from the shard to Raft
+func (self *Shard) getColumnNamesForSeriesDEPRECATED(db, series string) []string {
+	dbNameStart := len(SERIES_COLUMN_INDEX_PREFIX)
+	seekKey := append(SERIES_COLUMN_INDEX_PREFIX, []byte(db+"~"+series+"~")...)
+	pred := func(key []byte) bool {
+		return len(key) >= dbNameStart && bytes.Equal(key[:dbNameStart], SERIES_COLUMN_INDEX_PREFIX)
+	}
+	it := self.db.Iterator()
+	defer it.Close()
+
+	names := make([]string, 0)
+	for it.Seek(seekKey); it.Valid(); it.Next() {
+		key := it.Key()
+		if !pred(key) {
+			break
+		}
+		dbSeriesColumn := string(key[dbNameStart:])
+		parts := strings.Split(dbSeriesColumn, "~")
+		if len(parts) > 2 {
+			if parts[0] != db || parts[1] != series {
+				break
+			}
+			names = append(names, parts[2])
+		}
+	}
+	if err := it.Error(); err != nil {
+		log.Error("Error while getting columns for series %s: %s", series, err)
+		return nil
+	}
+	return names
+}
+
+// TODO: remove this after a version that doesn't support migration from old non-raft metastore
+func (self *Shard) getIdForDbSeriesColumnDEPRECATED(db, series, column *string) (ret []byte, err error) {
+	s := fmt.Sprintf("%s~%s~%s", *db, *series, *column)
+	b := []byte(s)
+	key := append(SERIES_COLUMN_INDEX_PREFIX, b...)
+	if ret, err = self.db.Get(key); err != nil {
+		return nil, err
+	}
+	return ret, nil
 }
