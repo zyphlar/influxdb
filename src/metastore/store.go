@@ -133,7 +133,7 @@ func (self *Store) GetSeriesForDatabase(database string) []string {
 	if !ok {
 		return nil
 	}
-	series := make([]string, len(databaseSeries))
+	series := make([]string, 0, len(databaseSeries))
 	for s := range databaseSeries {
 		series = append(series, s)
 	}
