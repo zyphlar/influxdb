@@ -327,11 +327,11 @@ func (self *CoordinatorImpl) readFromResponseChannels(processor cluster.QueryPro
 	writer SeriesWriter,
 	isExplainQuery bool,
 	errors chan<- error,
-	channels <-chan (<-chan *protocol.Response)) {
+	responseChannels <-chan (<-chan *protocol.Response)) {
 
 	defer close(errors)
 
-	for responseChan := range channels {
+	for responseChan := range responseChannels {
 		for response := range responseChan {
 
 			//log.Debug("GOT RESPONSE: ", response.Type, response.Series)
