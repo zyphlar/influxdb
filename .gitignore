@@ -37,6 +37,7 @@ godef
 gosym
 gocode
 inspect-raft
+create-root
 
 # dependencies
 out_rpm/
