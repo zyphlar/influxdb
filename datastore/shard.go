@@ -4,12 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"sync"
 	"time"
 
 	"code.google.com/p/goprotobuf/proto"
 	log "code.google.com/p/log4go"
+	"github.com/influxdb/influxdb/_vendor/pcre"
 	"github.com/influxdb/influxdb/common"
 	"github.com/influxdb/influxdb/datastore/storage"
 	"github.com/influxdb/influxdb/engine"
@@ -252,7 +252,7 @@ func (self *Shard) deleteRangeOfFields(fields []*metastore.Field, st, et int64) 
 // 	log.Info("Shard compaction is done")
 // }
 
-func (self *Shard) deleteRangeOfRegex(database string, regex *regexp.Regexp, startTime, endTime time.Time) error {
+func (self *Shard) deleteRangeOfRegex(database string, regex *pcre.Regexp, startTime, endTime time.Time) error {
 	series := self.metaStore.GetSeriesForDatabaseAndRegex(database, regex)
 	for _, name := range series {
 		err := self.deleteRangeOfSeries(database, name, startTime, endTime)

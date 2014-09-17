@@ -1,9 +1,9 @@
 package parser
 
 import (
-	"regexp"
 	"time"
 
+	"github.com/influxdb/influxdb/_vendor/pcre"
 	"github.com/influxdb/influxdb/common"
 )
 
@@ -11,7 +11,7 @@ type QuerySpec struct {
 	query                       *Query
 	database                    string
 	isRegex                     bool
-	regex                       *regexp.Regexp
+	regex                       *pcre.Regexp
 	names                       []string
 	user                        common.User
 	startTime                   time.Time
@@ -65,7 +65,7 @@ func (self *QuerySpec) TableNames() []string {
 	return names
 }
 
-func (self *QuerySpec) TableNamesAndRegex() ([]string, *regexp.Regexp) {
+func (self *QuerySpec) TableNamesAndRegex() ([]string, *pcre.Regexp) {
 	if self.names != nil {
 		return self.names, self.regex
 	}

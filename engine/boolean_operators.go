@@ -2,8 +2,9 @@ package engine
 
 import (
 	"fmt"
-	"regexp"
+	"strings"
 
+	"github.com/influxdb/influxdb/_vendor/pcre"
 	"github.com/influxdb/influxdb/common"
 	"github.com/influxdb/influxdb/protocol"
 )
@@ -97,8 +98,18 @@ func RegexMatcherOperator(leftValue, rightValue *protocol.FieldValue) (OperatorR
 
 	switch cType {
 	case common.TYPE_STRING:
-		// TODO: assume that the regex is valid
-		if ok, _ := regexp.MatchString(v2.(string), v1.(string)); ok {
+		regexString := v2.(string)
+		var regex pcre.Regexp
+		if strings.HasSuffix(regexString, "/i") {
+			regex = pcre.MustCompile(regexString[1:len(regexString)-2], pcre.CASELESS|pcre.NO_AUTO_CAPTURE)
+		} else if strings.HasSuffix(regexString, "/") {
+			regex = pcre.MustCompile(regexString[1:len(regexString)-2], pcre.NO_AUTO_CAPTURE)
+		} else {
+			panic("Not a regex")
+		}
+
+		m := regex.MatcherString(v1.(string), 0)
+		if m.Matches() {
 			return MATCH, nil
 		}
 		return NO_MATCH, nil

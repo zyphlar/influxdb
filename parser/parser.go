@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unsafe"
+
+	"github.com/influxdb/influxdb/_vendor/pcre"
 )
 
 type From struct {
@@ -161,7 +162,7 @@ func (self *ListQuery) IsCaseSensitive() bool {
 	return self.value.IsInsensitive
 }
 
-func (self *ListQuery) GetRegex() *regexp.Regexp {
+func (self *ListQuery) GetRegex() *pcre.Regexp {
 	regex, _ := self.value.GetCompiledRegex()
 	return regex
 }
@@ -300,13 +301,13 @@ func (self *SelectQuery) IsNonRecursiveContinuousQuery() bool {
 	intoClause := self.GetIntoClause()
 
 	for _, from := range fromClause.Names {
-		regex, ok := from.Name.GetCompiledRegex()
+		_, ok := from.Name.GetCompiledRegex()
 
 		if !ok {
 			continue
 		}
 
-		regexString := regex.String()
+		regexString := from.Name.Name
 		intoTarget := intoClause.Target.Name
 
 		if !strings.Contains(intoTarget, ":series_name") {
@@ -425,11 +426,13 @@ func GetValue(value *C.value) (*Value, error) {
 	v.Type = ValueType(value.value_type)
 	isCaseInsensitive := value.is_case_insensitive != 0
 	if v.Type == ValueRegex {
+		flags := pcre.NO_AUTO_CAPTURE | pcre.NO_UTF8_CHECK | pcre.DOTALL
 		if isCaseInsensitive {
-			v.compiledRegex, err = regexp.Compile("(?i)" + v.Name)
-		} else {
-			v.compiledRegex, err = regexp.Compile(v.Name)
+			flags |= pcre.CASELESS
 		}
+		var cr pcre.Regexp
+		cr, err = pcre.Compile(v.Name, flags)
+		v.compiledRegex = &cr
 		v.IsInsensitive = isCaseInsensitive
 	}
 	if value.alias != nil {

@@ -7,7 +7,8 @@ import "C"
 import (
 	"bytes"
 	"fmt"
-	"regexp"
+
+	"github.com/influxdb/influxdb/_vendor/pcre"
 )
 
 type ValueType int
@@ -32,7 +33,7 @@ type Value struct {
 	Alias         string
 	Type          ValueType
 	Elems         []*Value
-	compiledRegex *regexp.Regexp
+	compiledRegex *pcre.Regexp
 	IsInsensitive bool
 }
 
@@ -40,7 +41,7 @@ func (self *Value) IsFunctionCall() bool {
 	return self.Type == ValueFunctionCall
 }
 
-func (self *Value) GetCompiledRegex() (*regexp.Regexp, bool) {
+func (self *Value) GetCompiledRegex() (*pcre.Regexp, bool) {
 	return self.compiledRegex, self.Type == ValueRegex
 }
 

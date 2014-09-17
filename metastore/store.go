@@ -3,10 +3,10 @@ package metastore
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"sync"
 
+	"github.com/influxdb/influxdb/_vendor/pcre"
 	"github.com/influxdb/influxdb/protocol"
 )
 
@@ -114,7 +114,7 @@ func (self *Store) GetOrSetFieldIds(database string, series []*protocol.Series) 
 	return nil
 }
 
-func (self *Store) GetSeriesForDatabaseAndRegex(database string, regex *regexp.Regexp) []string {
+func (self *Store) GetSeriesForDatabaseAndRegex(database string, regex *pcre.Regexp) []string {
 	self.fieldsLock.RLock()
 	defer self.fieldsLock.RUnlock()
 	databaseSeries, ok := self.StringsToIds[database]
@@ -122,8 +122,9 @@ func (self *Store) GetSeriesForDatabaseAndRegex(database string, regex *regexp.R
 		return nil
 	}
 	matchingSeries := make([]string, 0)
+	m := regex.MatcherString("", 0)
 	for series := range databaseSeries {
-		if regex.MatchString(series) {
+		if m.MatchString(series, 0) {
 			matchingSeries = append(matchingSeries, series)
 		}
 	}

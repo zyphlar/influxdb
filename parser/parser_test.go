@@ -2,10 +2,10 @@ package parser
 
 import (
 	"fmt"
-	"regexp"
 	"testing"
 	"time"
 
+	"github.com/influxdb/influxdb/_vendor/pcre"
 	. "launchpad.net/gocheck"
 )
 
@@ -310,13 +310,13 @@ func (self *QueryParserSuite) TestParseListSeries(c *C) {
 		listSeriesQuery = queries[0].GetListSeriesQuery()
 		c.Assert(listSeriesQuery, NotNil)
 		c.Assert(listSeriesQuery.HasRegex(), Equals, true)
-		var regularExpression *regexp.Regexp
+		var regularExpression pcre.Regexp
 		if i == 1 {
-			regularExpression, _ = regexp.Compile("(?i)^foo.*")
+			regularExpression, _ = pcre.Compile("^foo.*", pcre.CASELESS|pcre.NO_AUTO_CAPTURE)
 		} else {
-			regularExpression, _ = regexp.Compile("^foo.*")
+			regularExpression, _ = pcre.Compile("^foo.*", pcre.NO_AUTO_CAPTURE)
 		}
-		c.Assert(listSeriesQuery.GetRegex(), DeepEquals, regularExpression)
+		c.Assert(listSeriesQuery.GetRegex(), DeepEquals, &regularExpression)
 		c.Assert(listSeriesQuery.IncludeSpaces, Equals, false)
 	}
 }
@@ -339,8 +339,8 @@ func (self *QueryParserSuite) TestParseListSeriesInludeSpaces(c *C) {
 	c.Assert(listSeriesQuery, NotNil)
 	c.Assert(listSeriesQuery.HasRegex(), Equals, true)
 	c.Assert(listSeriesQuery.IncludeSpaces, Equals, true)
-	regularExpression, _ := regexp.Compile("foo.*")
-	c.Assert(listSeriesQuery.GetRegex(), DeepEquals, regularExpression)
+	regularExpression, _ := pcre.Compile("foo.*", pcre.NO_AUTO_CAPTURE)
+	c.Assert(listSeriesQuery.GetRegex(), DeepEquals, &regularExpression)
 }
 
 // issue #267
@@ -398,7 +398,8 @@ func (self *QueryParserSuite) TestParseSelectWithInsensitiveRegexTables(c *C) {
 	c.Assert(fromClause.Names, HasLen, 1)
 	regex, ok := fromClause.Names[0].Name.GetCompiledRegex()
 	c.Assert(ok, Equals, true)
-	c.Assert(regex.MatchString("USERSFOOBAR"), Equals, true)
+	m := regex.MatcherString("USERSFOOBAR", 0)
+	c.Assert(m.Matches(), Equals, true)
 }
 
 func (self *QueryParserSuite) TestParseSelectWithRegexTables(c *C) {
@@ -410,8 +411,10 @@ func (self *QueryParserSuite) TestParseSelectWithRegexTables(c *C) {
 	c.Assert(fromClause.Names, HasLen, 1)
 	regex, ok := fromClause.Names[0].Name.GetCompiledRegex()
 	c.Assert(ok, Equals, true)
-	c.Assert(regex.MatchString("USERSFOOBAR"), Equals, false)
-	c.Assert(regex.MatchString("usersfoobar"), Equals, true)
+	m := regex.MatcherString("USERSFOOBAR", 0)
+	c.Assert(m.Matches(), Equals, false)
+	m = regex.MatcherString("usersfoobar", 0)
+	c.Assert(m.Matches(), Equals, true)
 }
 
 func (self *QueryParserSuite) TestParseSelectWithMultipleTables(c *C) {
@@ -777,7 +780,7 @@ func (self *QueryParserSuite) TestParseWithColumnAlias(c *C) {
 
 func (self *QueryParserSuite) TestParseSelectWithInvalidRegex(c *C) {
 	_, err := ParseSelectQuery("select email from users.events where email =~ /[/i and time>now()-2d;")
-	c.Assert(err, ErrorMatches, ".*missing closing.*")
+	c.Assert(err, ErrorMatches, ".*missing.*")
 }
 
 func (self *QueryParserSuite) TestParseSelectWithRegexCondition(c *C) {

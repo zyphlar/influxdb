@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -22,18 +21,6 @@ import (
 	"github.com/influxdb/influxdb/protocol"
 	"github.com/influxdb/influxdb/wal"
 )
-
-// defined by cluster config (in cluster package)
-type QuerySpec interface {
-	GetStartTime() time.Time
-	GetEndTime() time.Time
-	Database() string
-	TableNames() []string
-	TableNamesAndRegex() ([]string, *regexp.Regexp)
-	GetGroupByInterval() *time.Duration
-	AllShardsQuery() bool
-	IsRegex() bool
-}
 
 type WAL interface {
 	AssignSequenceNumbersAndLog(request *protocol.Request, shard wal.Shard) (uint32, error)
@@ -969,7 +956,7 @@ func (self *ClusterConfiguration) GetShard(id uint32) *ShardData {
 	return nil
 }
 
-func (self *ClusterConfiguration) getShardRange(querySpec QuerySpec, shards []*ShardData) []*ShardData {
+func (self *ClusterConfiguration) getShardRange(querySpec *parser.QuerySpec, shards []*ShardData) []*ShardData {
 	if querySpec.AllShardsQuery() {
 		return shards
 	}

@@ -110,8 +110,9 @@ func (self *Coordinator) runListSeriesQuery(querySpec *parser.QuerySpec, p engin
 	if q.HasRegex() {
 		matchingSeries = nil
 		regex := q.GetRegex()
+		m := regex.MatcherString("", 0)
 		for _, s := range allSeries {
-			if !regex.MatchString(s) {
+			if !m.MatchString(s, 0) {
 				continue
 			}
 			matchingSeries = append(matchingSeries, s)
@@ -355,7 +356,8 @@ func (self *Coordinator) ProcessContinuousQueries(db string, series *protocol.Se
 			for _, table := range fromClause.Names {
 				tableValue := table.Name
 				if regex, ok := tableValue.GetCompiledRegex(); ok {
-					if regex.MatchString(incomingSeriesName) {
+					m := regex.MatcherString(incomingSeriesName, 0)
+					if m.Matches() {
 						self.InterpolateValuesAndCommit(query.GetQueryString(), db, series, targetName, false)
 					}
 				} else {
