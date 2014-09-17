@@ -266,11 +266,13 @@ func (self *SingleServerSuite) TestInvalidDataWrite(c *C) {
 }
 
 func (self *SingleServerSuite) BenchmarkListSeries(c *C) {
-	s := CreateSeries("reallylongtimeseriesprefix", 700000)
+	s := CreateSeries("reallylongtimeseriesprefix", 1000000)
 	self.server.WriteData(s, c)
 	c.ResetTimer()
 	for i := 0; i < c.N; i++ {
-		self.server.RunQuery("list series", "m", c)
+		q := self.server.RunQuery(`list series /^reallylongtimeseriesprefix1\d$/`, "m", c)
+		c.Assert(q, HasLen, 1)
+		c.Assert(q[0].Points, HasLen, 10)
 	}
 }
 
