@@ -38,6 +38,11 @@ func main() {
 		cmd = args[0]
 	}
 
+	// Special case -h immediately following binary name
+	if args[0] == "-h" {
+		cmd = "help"
+	}
+
 	// If command is "help" and has an argument then rewrite args to use "-h".
 	if cmd == "help" && len(args) > 1 {
 		args[0], args[1] = args[1], "-h"
