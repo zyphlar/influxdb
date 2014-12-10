@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -65,6 +66,15 @@ func main() {
 // execVersion runs the "version" command.
 // Prints the commit SHA1 if set by the build process.
 func execVersion(args []string) {
+	fs := flag.NewFlagSet("", flag.ExitOnError)
+	fs.Usage = func() {
+		log.Println(`usage: version
+
+	version displays the InfluxDB version and build git commit hash
+	`)
+	}
+	fs.Parse(args)
+
 	s := fmt.Sprintf("InfluxDB v%s", version)
 	if commit != "" {
 		s += fmt.Sprintf(" (git: %s)", commit)
